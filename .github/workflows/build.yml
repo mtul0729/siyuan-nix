@@ -28,6 +28,9 @@ jobs:
       - name: Build siyuan-server
         run: nix build -L .#siyuan-server
 
+      - name: Build siyuan-client
+        run: nix build -L .#siyuan-client
+
       - name: Build prefetch derivations
         if: github.event_name != 'pull_request'
         run: |

@@ -1,15 +1,16 @@
-# SiYuan 服务器 Nix Flake：以 siyuan-note/siyuan 官方仓库为源，构建「内核 + 前端静态资源」服务器包，
-# 并提供 NixOS systemd 服务模块。
+# SiYuan 服务器 Nix Flake：以 siyuan-note/siyuan 官方仓库为源，构建「内核 + 前端静态资源」服务器包
+# 与 Electron 桌面客户端，并提供 NixOS systemd 服务模块。
 #
 # 常用命令：
 #   nix build .#siyuan-server            构建服务器包（含 SiYuan-Kernel 内核与 appearance/stage 等静态资源）
+#   nix build .#siyuan-client            构建桌面客户端（Electron）
 #   nix build .#siyuan-server.passthru.kernel.goModules   单独预取 Go 依赖（vendorHash 变更后用于校验）
 #   nix build .#siyuan-server.passthru.ui.pnpmDeps        单独预取 pnpm 依赖（pnpmDeps hash 变更后用于校验）
 #   nix flake update siyuan-src          升级 SiYuan 源码到新 tag
 #
 # 升级 SiYuan 版本步骤：
 #   1. 修改下方 tag（version 自动去除 v 前缀派生）
-#   2. 若构建报哈希不匹配，按错误信息中的 got: sha256-... 更新 srcHash / vendorHash / pnpmDeps.hash
+#   2. 若构建报哈希不匹配，按错误信息中的 got: sha256-... 更新 kernel 的 vendorHash / ui 的 pnpmDeps.hash
 #
 # 在 NixOS 配置中启用：
 #   imports = [ siyuan-nix.nixosModules.default ];
@@ -19,7 +20,7 @@
 #     openFirewall = true;
 #   };
 {
-  description = "SiYuan note server with a NixOS module";
+  description = "SiYuan note server & desktop client with a NixOS module";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -43,104 +44,42 @@
         hash = "sha256-Rcx4+wwEfPZv0WjsxpHCk3qYV52jPdQCJcwUFeDkbos=";
       };
 
-      # 构建前端静态资源（appearance/ stage/ guide/ changelogs/），产物布局与官方 Dockerfile 一致，
-      # 内核通过 --wd 指向该目录伺服 UI。Electron 相关依赖仅参与打包桌面版，此处跳过其二进制下载。
-      mkUi = pkgs: src:
-        let
-          pnpmDeps = pkgs.fetchPnpmDeps {
-            pname = "siyuan-ui";
-            inherit version;
-            pnpm = pkgs.pnpm_11;
-            src = src + "/app";
-            # pnpm 11 的依赖存储格式对应 fetcherVersion = 4（含 SQLite 状态库的可复现转储）
-            fetcherVersion = 4;
-            hash = "sha256-ACWwXIwuiLp/e+1dwlClzAi8ZC6oEQc3ETFK/WvVnGk=";
-          };
-        in
-        pkgs.stdenv.mkDerivation {
-          pname = "siyuan-ui";
-          inherit version;
-
-          src = src + "/app";
-
-          inherit pnpmDeps;
-          # pnpmConfigHook 从 PATH 中查找 pnpm，需与 fetchPnpmDeps 使用的版本一致（pnpm_11）
-          nativeBuildInputs = [ pkgs.nodejs_22 pkgs.pnpm_11 pkgs.pnpmConfigHook ];
-
-          env.ELECTRON_SKIP_BINARY_DOWNLOAD = "1";
-
-          buildPhase = ''
-            runHook preBuild
-            pnpm run build
-            node scripts/trimChangelogs.js
-            runHook postBuild
-          '';
-
-          installPhase = ''
-            mkdir -p $out/lib/siyuan
-            mv stage appearance guide changelogs $out/lib/siyuan/
-          '';
-
-          passthru = { inherit pnpmDeps; };
-          meta = with pkgs.lib; {
-            description = "SiYuan web UI static assets";
-            license = licenses.agpl3Only;
-            platforms = platforms.linux;
-          };
-        };
-
-      # 编译 Go 内核（SQLite 启用 fts5 与 sqlcipher），对应 Dockerfile 的 go-build 阶段
-      mkKernel = pkgs: src: pkgs.buildGoModule {
-        pname = "siyuan-kernel";
-        inherit version;
-
-        src = src + "/kernel";
-
-        # 锁定与 go.mod 一致的工具链，避免沙箱内触发 GOTOOLCHAIN 自动下载
-        go = pkgs.go_1_26;
-
-        vendorHash = "sha256-PNRVGo9yoVyyFPLp3sKNjIMVvON/+LxeBal78WguDlM=";
-
-        tags = [ "fts5" "sqlcipher" ];
-        ldflags = [ "-s" "-w" ];
-        env.CGO_ENABLED = "1";
-        doCheck = false;
-
-        meta = with pkgs.lib; {
-          description = "SiYuan kernel (reflection-focused note server)";
-          license = licenses.agpl3Only;
-          platforms = platforms.linux;
-          mainProgram = "siyuan-kernel";
-        };
-      };
-
-      siyuanPackages = pkgs:
+      mkPackages = pkgs:
         let
           src = mkSrc pkgs;
-          ui = mkUi pkgs src;
-          kernel = mkKernel pkgs src;
+          kernel = pkgs.callPackage ./pkgs/siyuan-kernel.nix { inherit version src; };
+          # 客户端内核注入 pandoc 路径补丁，使其直接使用 nix pandoc（服务端闭包不引入 pandoc）
+          clientKernel = pkgs.callPackage ./pkgs/siyuan-kernel.nix {
+            inherit version src;
+            patches = [
+              (pkgs.replaceVars ./pkgs/set-pandoc-path.patch {
+                pandoc_path = pkgs.lib.getExe pkgs.pandoc;
+              })
+            ];
+          };
+          ui = pkgs.callPackage ./pkgs/siyuan-ui.nix { inherit version src; };
         in
-        # 最终包：内核二进制 + 静态资源合并到同一输出；$out/lib/siyuan 即内核的 --wd 工作目录。
-        # 子推导挂到 passthru 上，便于单独构建预取类固定输出推导以计算哈希。
-        pkgs.symlinkJoin {
-          name = "siyuan-server-${version}";
-          paths = [ ui kernel ];
-          passthru = { inherit ui kernel; };
-          meta = kernel.meta // { mainProgram = "siyuan-kernel"; };
+        {
+          siyuan-server = pkgs.callPackage ./pkgs/siyuan-server.nix {
+            inherit version ui kernel;
+          };
+          siyuan-client = pkgs.callPackage ./pkgs/siyuan-client.nix {
+            inherit version src;
+            pnpmDeps = ui.pnpmDeps;
+            kernel = clientKernel;
+          };
         };
 
     in
     {
       packages = forAllSystems (system:
-        let pkgs = pkgsFor system; in
-        {
-          siyuan-server = siyuanPackages pkgs;
-          default = self.packages.${system}.siyuan-server;
-        });
+        let
+          pkgs = pkgsFor system;
+          packages = mkPackages pkgs;
+        in
+        packages // { default = packages.siyuan-server; });
 
-      overlays.default = final: _prev: {
-        siyuan-server = siyuanPackages final;
-      };
+      overlays.default = final: _prev: mkPackages final;
 
       nixosModules.default = { config, lib, pkgs, ... }:
         let
