@@ -11,7 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        include:
+          - os: ubuntu-latest
+            system: x86_64-linux
+          - os: ubuntu-24.04-arm
+            system: aarch64-linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -30,6 +34,9 @@ jobs:
 
       - name: Build siyuan-client
         run: nix build -L .#siyuan-client
+
+      - name: Run kernel tests
+        run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel
 
       - name: Build prefetch derivations
         if: github.event_name != 'pull_request'

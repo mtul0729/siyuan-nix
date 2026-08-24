@@ -79,6 +79,19 @@
         in
         packages // { default = packages.siyuan-server; });
 
+      # 与主构建解耦的测试推导：nix build .#checks.<system>.siyuan-kernel 单独跑内核测试
+      checks = forAllSystems (system:
+        let
+          pkgs = pkgsFor system;
+          src = mkSrc pkgs;
+        in
+        {
+          siyuan-kernel = pkgs.callPackage ./pkgs/siyuan-kernel.nix {
+            inherit version src;
+            doCheck = true;
+          };
+        });
+
       overlays.default = final: _prev: mkPackages final;
 
       nixosModules.default = { config, lib, pkgs, ... }:

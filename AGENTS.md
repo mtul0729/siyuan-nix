@@ -7,6 +7,7 @@ Nix flake packaging SiYuan (note server + Electron client + NixOS module) from t
 ```bash
 nix build -L .#siyuan-server         # server package
 nix build -L .#siyuan-client         # Electron desktop client
+nix build -L .#checks.<system>.siyuan-kernel   # kernel go test (independent of main build)
 nix flake check --no-build --all-systems   # eval-only validation of both arches
 ```
 

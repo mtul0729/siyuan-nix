@@ -7,6 +7,8 @@
   version,
   src,
   patches ? [ ],
+  # 主构建默认跳过测试；测试作为独立的 checks 推导运行（见 flake.nix 的 checks 输出）
+  doCheck ? false,
 }:
 
 buildGoModule {
@@ -29,7 +31,13 @@ buildGoModule {
     "-w"
   ];
   env.CGO_ENABLED = "1";
-  doCheck = false;
+  inherit doCheck;
+
+  # 这些上游测试对环境有隐含假设（状态码预期、系统 MIME 表、非确定性顺序、
+  # 沙箱内无预编译 pandoc），在 Nix 沙箱中必挂，跳过方式同 nixpkgs
+  checkFlags = [
+    "-skip=^(TestSpinBlockDOMInputSizeLimit|TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension|TestInitPandocDoesNotUseWorkspaceTemp|TestFilterPathsByPublishAccess)$"
+  ];
 
   # go build 产物名为 bin/kernel，统一改名为 siyuan-kernel
   # （NixOS 模块与客户端打包均按此名引用）
