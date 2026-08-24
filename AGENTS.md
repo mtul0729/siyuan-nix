@@ -24,7 +24,7 @@ There are no tests/linters; CI (`.github/workflows/build.yml`) builds both packa
 
 - Flakes only see git-tracked files: `git add` new files before any `nix` command or evaluation fails confusingly.
 - Kernel binary is renamed in `postInstall` (`bin/kernel` → `bin/siyuan-kernel`, Go's default product name is `bin/kernel`). Both the client packaging and the NixOS module reference `siyuan-kernel`; don't reference `bin/kernel`.
-- There are two kernel variants built from the same source: plain (server — keeps pandoc out of its closure) and patched (client — injects `pkgs/set-pandoc-path.patch` via `replaceVars @pandoc_path@`). Keep it that way.
+- There is a single kernel variant shared by server and client, patched via `pkgs/set-pandoc-path.patch` (`replaceVars @pandoc_path@`) to use nixpkgs pandoc directly — the server closure intentionally contains pandoc (docx export works out of the box). Don't "optimize" it away.
 - Client reuses `ui.pnpmDeps` (same app lockfile); don't add a second `fetchPnpmDeps`.
 - Client packaging mirrors nixpkgs' siyuan recipe: electron-builder runs with `--dir`, needs a platform pandoc zip rebuilt from nixpkgs pandoc (its `afterPack` hook extracts it), kernel symlinked as `SiYuan-Kernel`. When upstream changes `app/` layout or `InitPandoc`, diff against the nixpkgs `pkgs/by-name/si/siyuan` package.
 - Version upgrades touch exactly one place: `tag` in `flake.nix` (+ hashes per above).

@@ -47,9 +47,9 @@
       mkPackages = pkgs:
         let
           src = mkSrc pkgs;
-          kernel = pkgs.callPackage ./pkgs/siyuan-kernel.nix { inherit version src; };
-          # 客户端内核注入 pandoc 路径补丁，使其直接使用 nix pandoc（服务端闭包不引入 pandoc）
-          clientKernel = pkgs.callPackage ./pkgs/siyuan-kernel.nix {
+          # 单一内核，注入 pandoc 路径补丁使 docx 导出开箱即用；
+          # 服务端闭包因此引入 pandoc（有意为之）
+          kernel = pkgs.callPackage ./pkgs/siyuan-kernel.nix {
             inherit version src;
             patches = [
               (pkgs.replaceVars ./pkgs/set-pandoc-path.patch {
@@ -61,12 +61,11 @@
         in
         {
           siyuan-server = pkgs.callPackage ./pkgs/siyuan-server.nix {
-            inherit version ui kernel;
+            inherit version src ui kernel;
           };
           siyuan-client = pkgs.callPackage ./pkgs/siyuan-client.nix {
-            inherit version src;
+            inherit version src kernel;
             pnpmDeps = ui.pnpmDeps;
-            kernel = clientKernel;
           };
         };
 
@@ -170,7 +169,10 @@
               type = lib.types.nullOr lib.types.package;
               default = null;
               example = lib.literalExpression "pkgs.pandoc";
-              description = "提供 pandoc 以支持导出 docx/odt 等格式；null 表示不安装";
+              description = ''
+                一般无需设置：内核已通过补丁内置 nix pandoc，docx/odt 导出开箱即用。
+                此项仅向服务进程 PATH 追加额外的 pandoc
+              '';
             };
 
             openFirewall = lib.mkOption {
