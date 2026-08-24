@@ -31,6 +31,12 @@ buildGoModule {
   env.CGO_ENABLED = "1";
   doCheck = false;
 
+  # go build 产物名为 bin/kernel，统一改名为 siyuan-kernel
+  # （NixOS 模块与客户端打包均按此名引用）
+  postInstall = ''
+    mv $out/bin/kernel $out/bin/siyuan-kernel
+  '';
+
   # gulu 复制文件时保留 store 只读权限会导致工作区文件只读，统一改为 0644（同 nixpkgs）
   modPostBuild = ''
     chmod +w vendor/github.com/88250/gulu
