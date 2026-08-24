@@ -99,7 +99,7 @@
         # 锁定与 go.mod 一致的工具链，避免沙箱内触发 GOTOOLCHAIN 自动下载
         go = pkgs.go_1_26;
 
-        vendorHash = ""; # TODO: 首次构建失败后按提示填入真实哈希
+        vendorHash = "sha256-PNRVGo9yoVyyFPLp3sKNjIMVvON/+LxeBal78WguDlM=";
 
         tags = [ "fts5" "sqlcipher" ];
         ldflags = [ "-s" "-w" ];
