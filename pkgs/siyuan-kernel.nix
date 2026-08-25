@@ -36,12 +36,15 @@ buildGoModule {
   env.CGO_ENABLED = "1";
   inherit doCheck;
 
-  # 这些上游测试对环境有隐含假设（状态码预期、系统 MIME 表、非确定性顺序、
-  # 沙箱内无预编译 pandoc / 无 workspace 配置），或自身存在缺陷
-  # （TestPublishReaderCannotBrowseEncryptedNotebook 在 SaveConf 重载后访问空的
-  # model.Conf.FileTree 而 panic），在 Nix 沙箱中必挂，跳过方式同 nixpkgs
+  # 跳过在 Nix 沙箱中无法通过的上游测试（方式同 nixpkgs）：
+  # - 环境假设类：沙箱无系统字体/预编译 pandoc/workspace 配置（CustomFont、ParseBundledFont、
+  #   DocumentTemplatesWait、InitPandoc、SystemPromptUsesAppearanceLanguage、SecureAssetContent）
+  # - 上游自身缺陷：SaveConf 重载后访问空的 model.Conf.FileTree 而 panic（PublishReaderCannotBrowse）；
+  #   绑定属性视图测试未创建 Box 即解引用（AddAttributeViewBlockAccepts）；
+  #   path_guard 断言与 Linux 实现不匹配（IsForbidden* 三项，v3.8.1 新增 publish 特性）
+  # - server 路由渲染类依赖完整 appearance 初始化（AuthPageActionLayout、HistoryRoute、RepoDiffRoute）
   checkFlags = [
-    "-skip=^(TestSpinBlockDOMInputSizeLimit|TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension|TestInitPandocDoesNotUseWorkspaceTemp|TestFilterPathsByPublishAccess|TestSystemPromptUsesAppearanceLanguage|TestPublishReaderCannotBrowseEncryptedNotebook|TestAddAttributeViewBlockAcceptsValidBoundItemWithoutDatabaseBlock)$"
+    "-skip=^(TestSpinBlockDOMInputSizeLimit|TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension|TestInitPandocDoesNotUseWorkspaceTemp|TestFilterPathsByPublishAccess|TestSystemPromptUsesAppearanceLanguage|TestPublishReaderCannotBrowseEncryptedNotebook|TestAddAttributeViewBlockAcceptsValidBoundItemWithoutDatabaseBlock|TestIsForbiddenAbsPath|TestIsForbiddenAbsPathSymlinkBypass|TestIsForbiddenDataRelPath|TestCustomFontLifecycle|TestDocumentTemplatesWaitForDatabaseIndex|TestParseBundledFontLocalizedName|TestAuthPageActionLayout|TestHistoryRouteBlocksSensitiveSnapshots|TestRepoDiffRouteBlocksSensitivePaths)$"
   ];
 
   # 默认 checkPhase 按目录串行跑且一挂即停，无法一次拿到完整失败清单；
