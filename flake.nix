@@ -8,9 +8,9 @@
 #   nix build .#siyuan-server.passthru.ui.pnpmDeps        单独预取 pnpm 依赖（pnpmDeps hash 变更后用于校验）
 #   nix flake update siyuan-src          升级 SiYuan 源码到新 tag
 #
-# 升级 SiYuan 版本步骤：
-#   1. 修改下方 tag（version 自动去除 v 前缀派生）
-#   2. 若构建报哈希不匹配，按错误信息中的 got: sha256-... 更新 kernel 的 vendorHash / ui 的 pnpmDeps.hash
+# 升级 SiYuan 版本步骤（详见 AGENTS.md 与 scripts/update.sh）：
+#   ./scripts/update.sh vX.Y.Z   重置 tag 并占位两个 FOD 哈希
+#   推送后按 CI 失败日志中的 got: sha256-... 回填，再推至绿
 #
 # 在 NixOS 配置中启用：
 #   imports = [ siyuan-nix.nixosModules.default ];
