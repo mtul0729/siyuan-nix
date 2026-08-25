@@ -11,6 +11,12 @@
   doCheck ? false,
 }:
 
+let
+  kernelTags = [
+    "fts5"
+    "sqlcipher"
+  ];
+in
 buildGoModule {
   pname = "siyuan-kernel";
   inherit version patches;
@@ -22,10 +28,7 @@ buildGoModule {
 
   vendorHash = "sha256-r0Ey7KP+grj/B89lJ9TlCoCI9mqRcc1KLbI5gFLnqhk=";
 
-  tags = [
-    "fts5"
-    "sqlcipher"
-  ];
+  tags = kernelTags;
   ldflags = [
     "-s"
     "-w"
