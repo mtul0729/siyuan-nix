@@ -48,7 +48,7 @@ buildGoModule {
   # 改为单次 go test 全量执行（某包 panic 只影响该包，其余包照常出结果）
   checkPhase = ''
     runHook preCheck
-    go test -vet=off -tags=${lib.concatStringsSep "," tags} $checkFlags ./...
+    go test -vet=off -tags=${lib.concatStringsSep "," kernelTags} $checkFlags ./...
     runHook postCheck
   '';
 
