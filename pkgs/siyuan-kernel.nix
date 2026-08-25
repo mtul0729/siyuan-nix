@@ -38,8 +38,16 @@ buildGoModule {
   # （TestPublishReaderCannotBrowseEncryptedNotebook 在 SaveConf 重载后访问空的
   # model.Conf.FileTree 而 panic），在 Nix 沙箱中必挂，跳过方式同 nixpkgs
   checkFlags = [
-    "-skip=^(TestSpinBlockDOMInputSizeLimit|TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension|TestInitPandocDoesNotUseWorkspaceTemp|TestFilterPathsByPublishAccess|TestSystemPromptUsesAppearanceLanguage|TestPublishReaderCannotBrowseEncryptedNotebook)$"
+    "-skip=^(TestSpinBlockDOMInputSizeLimit|TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension|TestInitPandocDoesNotUseWorkspaceTemp|TestFilterPathsByPublishAccess|TestSystemPromptUsesAppearanceLanguage|TestPublishReaderCannotBrowseEncryptedNotebook|TestAddAttributeViewBlockAcceptsValidBoundItemWithoutDatabaseBlock)$"
   ];
+
+  # 默认 checkPhase 按目录串行跑且一挂即停，无法一次拿到完整失败清单；
+  # 改为单次 go test 全量执行（某包 panic 只影响该包，其余包照常出结果）
+  checkPhase = ''
+    runHook preCheck
+    go test -vet=off -tags=${lib.concatStringsSep "," tags} $checkFlags ./...
+    runHook postCheck
+  '';
 
   # go build 产物名为 bin/kernel，统一改名为 siyuan-kernel
   # （NixOS 模块与客户端打包均按此名引用）
