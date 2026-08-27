@@ -7,7 +7,8 @@ Nix flake packaging SiYuan (note server + Electron client + NixOS module) from t
 ```bash
 nix build -L .#siyuan-server         # server package
 nix build -L .#siyuan-client         # Electron desktop client
-nix build -L .#checks.<system>.siyuan-kernel   # kernel go test (independent of main build)
+nix build -L .#checks.<system>.siyuan-kernel-test   # kernel go test (via passthru.kernel + overrideAttrs)
+nix build -L .#siyuan-server.passthru.kernel   # kernel derivation (no tests)
 nix flake check --no-build --all-systems   # eval-only validation of both arches
 ./scripts/update.sh vX.Y.Z           # version bump: rewrites tag + resets both FOD hashes
 ```
@@ -26,7 +27,8 @@ Run `./scripts/update.sh vX.Y.Z`: it rewrites `tag` in `flake.nix` and resets `v
 
 - Flakes only see git-tracked files: `git add` new files before any `nix` command or evaluation fails confusingly.
 - FOD hash invariant (see `docs/updating.md`): a fixed-output derivation's store path is derived from name + declared hash only, NOT its build script. If you change anything that affects a FOD's content (`modPostBuild`, go.mod deps, lockfiles) without rotating the declared hash, the new build collides with the old artifact path and is silently skipped — patches stop applying with zero errors. Always re-run the placeholder → CI `got:` → fill-in rotation after such changes, even without a version bump.
-- The kernel check derivation runs all test packages in one `go test ./...` invocation (default checkPhase aborts at the first failing package). Upstream tests that cannot pass in the Nix sandbox or are broken upstream are skipped via `checkFlags -skip`; classify new skips in the comment above that list. Deferred upstream reports: `docs/upstream-issues.md`.
+- The kernel check derivation runs all test packages in one `go test ./...` invocation (default checkPhase aborts at the first failing package). Deferred upstream reports: `docs/upstream-issues.md`.
+- Kernel test derivation lives in `flake.nix` `checks` as `kernel.overrideAttrs`; the kernel derivation stays pure build logic.
 - Kernel binary is renamed in `postInstall` (`bin/kernel` → `bin/siyuan-kernel`, Go's default product name is `bin/kernel`). Both the client packaging and the NixOS module reference `siyuan-kernel`; don't reference `bin/kernel`.
 - There is a single kernel variant shared by server and client, patched via `pkgs/set-pandoc-path.patch` (`replaceVars @pandoc_path@`) to use nixpkgs pandoc directly — the server closure intentionally contains pandoc (docx export works out of the box). Don't "optimize" it away.
 - Client reuses `ui.pnpmDeps` (same app lockfile); don't add a second `fetchPnpmDeps`.

@@ -36,7 +36,7 @@ jobs:
         run: nix build -L .#siyuan-client
 
       - name: Run kernel tests
-        run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel
+        run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
 
       - name: Build prefetch derivations
         if: github.event_name != 'pull_request'

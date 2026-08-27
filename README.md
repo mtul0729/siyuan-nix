@@ -46,7 +46,7 @@ nix profile install github:mtul0729/siyuan-nix#siyuan-client
 ```bash
 nix build -L .#siyuan-server                        # 服务端包
 nix build -L .#siyuan-client                        # 桌面客户端
-nix build -L .#checks.x86_64-linux.siyuan-kernel    # 内核 go 测试（独立于主构建）
+nix build -L .#checks.x86_64-linux.siyuan-kernel-test    # 内核 go 测试（独立于主构建）
 nix flake check --no-build --all-systems            # 双架构纯求值校验
 ./scripts/update.sh v3.8.2                          # 升级版本（详见脚本头注释）
 ```

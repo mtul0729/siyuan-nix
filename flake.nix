@@ -78,16 +78,23 @@
         in
         packages // { default = packages.siyuan-server; });
 
-      # 与主构建解耦的测试推导：nix build .#checks.<system>.siyuan-kernel 单独跑内核测试
+      # 与主构建解耦的测试推导：nix build .#checks.<system>.siyuan-kernel-test
       checks = forAllSystems (system:
         let
           pkgs = pkgsFor system;
-          src = mkSrc pkgs;
+          packages = mkPackages pkgs;
+          kernel = packages.siyuan-server.passthru.kernel;
         in
         {
-          siyuan-kernel = pkgs.callPackage ./pkgs/siyuan-kernel.nix {
-            inherit version src;
+          siyuan-kernel-test = kernel.overrideAttrs {
+            pname = "siyuan-kernel-test";
             doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              go test -vet=off -tags=fts5,sqlcipher ./...
+              runHook postCheck
+            '';
+            installPhase = "touch $out";
           };
         });
 

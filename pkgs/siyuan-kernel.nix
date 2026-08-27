@@ -7,8 +7,6 @@
   version,
   src,
   patches ? [ ],
-  # 主构建默认跳过测试；测试作为独立的 checks 推导运行（见 flake.nix 的 checks 输出）
-  doCheck ? false,
 }:
 
 let
@@ -34,26 +32,6 @@ buildGoModule {
     "-w"
   ];
   env.CGO_ENABLED = "1";
-  inherit doCheck;
-
-  # 跳过在 Nix 沙箱中无法通过的上游测试（方式同 nixpkgs）：
-  # - 环境假设类：沙箱无系统字体/预编译 pandoc/workspace 配置（CustomFont、ParseBundledFont、
-  #   DocumentTemplatesWait、InitPandoc、SystemPromptUsesAppearanceLanguage、SecureAssetContent）
-  # - 上游自身缺陷：SaveConf 重载后访问空的 model.Conf.FileTree 而 panic（PublishReaderCannotBrowse）；
-  #   绑定属性视图测试未创建 Box 即解引用（AddAttributeViewBlockAccepts）；
-  #   path_guard 断言与 Linux 实现不匹配（IsForbidden* 三项，v3.8.1 新增 publish 特性）
-  # - server 路由渲染类依赖完整 appearance 初始化（AuthPageActionLayout、HistoryRoute、RepoDiffRoute）
-  checkFlags = [
-    "-skip=^(TestSpinBlockDOMInputSizeLimit|TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension|TestInitPandocDoesNotUseWorkspaceTemp|TestFilterPathsByPublishAccess|TestSystemPromptUsesAppearanceLanguage|TestPublishReaderCannotBrowseEncryptedNotebook|TestAddAttributeViewBlockAcceptsValidBoundItemWithoutDatabaseBlock|TestIsForbiddenAbsPath|TestIsForbiddenAbsPathSymlinkBypass|TestIsForbiddenDataRelPath|TestCustomFontLifecycle|TestDocumentTemplatesWaitForDatabaseIndex|TestParseBundledFontLocalizedName|TestAuthPageActionLayout|TestHistoryRouteBlocksSensitiveSnapshots|TestRepoDiffRouteBlocksSensitivePaths)$"
-  ];
-
-  # 默认 checkPhase 按目录串行跑且一挂即停，无法一次拿到完整失败清单；
-  # 改为单次 go test 全量执行（某包 panic 只影响该包，其余包照常出结果）
-  checkPhase = ''
-    runHook preCheck
-    go test -vet=off -tags=${lib.concatStringsSep "," kernelTags} $checkFlags ./...
-    runHook postCheck
-  '';
 
   # go build 产物名为 bin/kernel，统一改名为 siyuan-kernel
   # （NixOS 模块与客户端打包均按此名引用）
