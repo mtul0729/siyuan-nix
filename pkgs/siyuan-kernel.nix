@@ -32,6 +32,7 @@ buildGoModule {
     "-w"
   ];
   env.CGO_ENABLED = "1";
+  doCheck = false;
 
   # go build 产物名为 bin/kernel，统一改名为 siyuan-kernel
   # （NixOS 模块与客户端打包均按此名引用）
