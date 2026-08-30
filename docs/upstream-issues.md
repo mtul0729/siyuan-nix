@@ -24,17 +24,18 @@
 - 标题草案（gulu）：`Copy preserves source read-only mode, making subsequent overwrites of the destination fail`
 - 标题草案（siyuan）：`Workspace appearance copies become read-only and break the next kernel start`
 
-## 3. v3.8.1 新增测试在 Linux 上自身失败
+## 3. 内核测试假定完整仓库布局（`../../app/*`），脱离全量 checkout 即失败
 
-CI（Nix 沙箱，x86_64/aarch64 一致复现；部分项纯逻辑断言失败，与沙箱无关）。本仓库暂以 `checkFlags -skip` 跳过（见 `pkgs/siyuan-kernel.nix` 注释分类）：
+`checks.siyuan-kernel-test`（见 `flake.nix` checks）按设计全量跑 `go test ./...`、不加任何跳过；失败即证据。当前 v3.8.2 下共 7 个失败测试，x86_64/aarch64 的 Nix 沙箱一致复现。共因：`siyuan-kernel.nix` 的 `src` 只有 `kernel/` 子树（`src + "/kernel"`），而这些测试按 `../../app/…` 相对路径读取语言目录、字体、stage、pandoc 资源——测试工作目录（kernel 模块根）之上没有 `app/` 兄弟目录。
 
-| 测试 | 包 | 症状 |
+| 测试 | 包 | 失败签名 |
 |---|---|---|
-| TestPublishReaderCannotBrowseEncryptedNotebook | api | SaveConf 重载后 `model.Conf.FileTree` 为 nil，filetree.go:1304 空指针 panic |
-| TestAddAttributeViewBlockAcceptsValidBoundItemWithoutDatabaseBlock | model | 未创建 Box 即经 box.go/conf.go 链路解引用 panic |
-| TestIsForbiddenDataRelPath / TestIsForbiddenAbsPath / TestIsForbiddenAbsPathSymlinkBypass | util | path_guard 断言与 Linux 实现不匹配（publish 特性新增，纯函数表测即失败） |
-| TestCustomFontLifecycle / TestParseBundledFontLocalizedName | model | 依赖系统字体环境 |
-| TestDocumentTemplatesWaitForDatabaseIndex | model | 依赖 workspace/数据库索引初始化 |
-| TestAuthPageActionLayout / TestHistoryRouteBlocksSensitiveSnapshots / TestRepoDiffRouteBlocksSensitivePaths | server | 依赖完整 appearance 初始化的路由渲染 |
+| TestAuthPageActionLayout | server | `serve_auth_test.go:31: open ../../app/stage/auth.html: no such file or directory` |
+| TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension | server | `serve_assets_test.go:354: test precondition failed: .xyz unexpectedly has a MIME type` |
+| TestSystemPromptUsesAppearanceLanguage | agent | `prompt_test.go:134: appearance language is missing from system prompt`（读不到 `app/appearance/langs`） |
+| TestDocumentTemplatesWaitForDatabaseIndex | model | `file_index_test.go:171: document template SQL subprocess failed: exit status 26`（链路内 `open ../../app/appearance/langs` 失败） |
+| TestCustomFontLifecycle | util | `custom_font_test.go:41: open ../../app/appearance/fonts/LxgwWenKai-Lite-1.501/LXGWWenKaiLite-Regular.ttf: no such file or directory` |
+| TestParseBundledFontLocalizedName | util | `font_test.go:110: open ../../app/appearance/fonts/LxgwWenKai-Lite-1.501/LXGWWenKaiLite-Regular.ttf: no such file or directory` |
+| TestInitPandocDoesNotUseWorkspaceTemp | util | `pandoc_test.go:54: workspace temporary Pandoc was selected: "/nix/store/…/pandoc"`（本仓库注入 nix pandoc 路径后与断言相撞） |
 
-标题草案：`Unit tests fail on Linux in v3.8.1 (nil dereference, path guard assertions, font environment)`——上报时可附各测试失败签名。
+标题草案：`Kernel unit tests hardcode ../../app paths assuming a full checkout and fail in a kernel-only build tree`——上报时可附各失败签名。
