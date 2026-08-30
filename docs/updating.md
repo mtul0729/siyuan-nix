@@ -16,6 +16,10 @@ gh workflow run build.yml --ref dev   # 非 push 触发分支需手动 dispatch
 
 哈希无法离线预计算；本地无代理访问 proxy.golang.org 会 EOF，因此按仓库惯例走 CI 日志迭代。
 
+> 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
+> 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。
+> 升级的验收只看两个包：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿，无需理会该 check。
+
 ## 为什么占位哈希是必须的（FOD 路径碰撞陷阱）
 
 固定输出推导的 store 路径**只由 `name + 声明的哈希` 决定，与构建脚本内容无关**：
