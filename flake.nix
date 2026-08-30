@@ -41,7 +41,7 @@
         owner = "siyuan-note";
         repo = "siyuan";
         rev = tag;
-        hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        hash = "sha256-MzsfeAWApHLDt4+aC9/O+5Dl8OD8p0l+/8tb2ZZyTos=";
       };
 
       mkPackages = pkgs:
