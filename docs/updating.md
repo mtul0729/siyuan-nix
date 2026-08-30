@@ -3,11 +3,12 @@
 ## 标准流程
 
 ```bash
-./scripts/update.sh v3.8.2        # 改 flake.nix 的 tag + 两个 FOD 哈希重置为占位符
+./scripts/update.sh v3.8.2        # 改 flake.nix 的 tag + src，三个 FOD 哈希（src/vendor/pnpm）重置为占位符
 git commit -m "Bump siyuan to 3.8.2"
 git push origin dev               # 建议 dev 分支验证；main 的 push 会自动触发 CI
 gh workflow run build.yml --ref dev   # 非 push 触发分支需手动 dispatch
-# CI 首轮必失败：从日志取两个 got: sha256-...（架构无关，两个 matrix 一致）
+# CI 首轮必失败：从日志取三个 got: sha256-...（架构无关，两个 matrix 一致）
+#   srcHash       -> flake.nix（mkSrc，fetchFromGitHub 的 hash）
 #   vendorHash    -> pkgs/siyuan-kernel.nix
 #   pnpmDeps.hash -> pkgs/siyuan-ui.nix
 # 回填后再推，CI 绿后合并 main

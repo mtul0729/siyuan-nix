@@ -10,14 +10,14 @@ nix build -L .#siyuan-client         # Electron desktop client
 nix build -L .#checks.<system>.siyuan-kernel-test   # kernel go test (via passthru.kernel + overrideAttrs)
 nix build -L .#siyuan-server.passthru.kernel   # kernel derivation (no tests)
 nix flake check --no-build --all-systems   # eval-only validation of both arches
-./scripts/update.sh vX.Y.Z           # version bump: rewrites tag + resets both FOD hashes
+./scripts/update.sh vX.Y.Z           # version bump: rewrites tag + resets all three FOD hashes
 ```
 
 There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds both packages on `x86_64-linux` and `aarch64-linux` (ubuntu-latest / ubuntu-24.04-arm matrix) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`.
 
 ## Update / hash workflow
 
-Run `./scripts/update.sh vX.Y.Z`: it rewrites `tag` in `flake.nix` and resets `vendorHash` (pkgs/siyuan-kernel.nix) and `pnpmDeps.hash` (pkgs/siyuan-ui.nix) to a placeholder. These hashes have no offline way to be precomputed — push, then read `got: sha256-...` from the CI failure log and fill both in; push again until green. The user prefers iterating via GitHub Actions logs over local builds.
+Run `./scripts/update.sh vX.Y.Z`: it rewrites `tag` and resets the `src` hash in `flake.nix`, plus `vendorHash` (pkgs/siyuan-kernel.nix) and `pnpmDeps.hash` (pkgs/siyuan-ui.nix) to a placeholder. These hashes have no offline way to be precomputed — push, then read `got: sha256-...` from the CI failure log and fill all three in; push again until green. Don't forget the `src` hash on a tag bump: `fetchFromGitHub`'s `hash` in `flake.nix` is a FOD too and the old value silently fails for the new tag. The user prefers iterating via GitHub Actions logs over local builds.
 
 - The pnpm hash is arch-independent; both matrix jobs print the same value.
 - Prefetch derivations exist for this: `.#siyuan-server.passthru.kernel.goModules` and `.#siyuan-server.passthru.ui.pnpmDeps`.

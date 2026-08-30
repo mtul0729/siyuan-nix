@@ -20,19 +20,22 @@ cd "$(dirname "$0")/.."
 fake='sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA='
 
 sed -i "s|^      tag = .*|      tag = \"$newtag\";|" flake.nix
+# src 随 tag 变化，同为 FOD，必须一并重置（fetchFromGitHub 的 hash）
+sed -i "s|^        hash = .*|        hash = \"$fake\";|" flake.nix
 sed -i "s|^  vendorHash = .*|  vendorHash = \"$fake\";|" pkgs/siyuan-kernel.nix
 sed -i "s|^    hash = .*|    hash = \"$fake\";|" pkgs/siyuan-ui.nix
 
 git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
 
-echo "done: tag -> $newtag, both FOD hashes reset to placeholder"
+echo "done: tag -> $newtag, three FOD hashes (src/vendor/pnpm) reset to placeholder"
 cat <<'EOF'
 
 next steps (hashes cannot be precomputed offline):
   1. commit & push (dev branch recommended), CI round 1 will fail printing got: sha256-...
      non-push branches: gh workflow run build.yml --ref <branch>
-  2. fill both got: values back in (arch-independent):
-       vendorHash   -> pkgs/siyuan-kernel.nix
+  2. fill all got: values back in (arch-independent):
+       srcHash       -> flake.nix (mkSrc)
+       vendorHash    -> pkgs/siyuan-kernel.nix
        pnpmDeps.hash -> pkgs/siyuan-ui.nix
   3. push again, CI must go green, then merge to main.
 

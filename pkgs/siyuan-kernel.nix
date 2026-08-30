@@ -24,7 +24,7 @@ buildGoModule {
   # 锁定与 go.mod 一致的工具链，避免沙箱内触发 GOTOOLCHAIN 自动下载
   go = go_1_26;
 
-  vendorHash = "sha256-r0Ey7KP+grj/B89lJ9TlCoCI9mqRcc1KLbI5gFLnqhk=";
+  vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
   tags = kernelTags;
   ldflags = [
