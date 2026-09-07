@@ -26,25 +26,32 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   };
 
-  outputs = { self, nixpkgs }:
+  outputs =
+    { self, nixpkgs }:
     let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
 
       # SiYuan 发布 tag；version 自动去除 v 前缀，升级时只需修改这一处
-      tag = "v3.8.2";
+      tag = "v3.8.3";
       version = nixpkgs.lib.removePrefix "v" tag;
 
       # 以 GitHub 上的官方发布源码为构建输入
-      mkSrc = pkgs: pkgs.fetchFromGitHub {
-        owner = "siyuan-note";
-        repo = "siyuan";
-        rev = tag;
-        hash = "sha256-MzsfeAWApHLDt4+aC9/O+5Dl8OD8p0l+/8tb2ZZyTos=";
-      };
+      mkSrc =
+        pkgs:
+        pkgs.fetchFromGitHub {
+          owner = "siyuan-note";
+          repo = "siyuan";
+          rev = tag;
+          hash = "sha256-+0CO1E0w4XCBRypjZftB0kRe01ebWI/piOySmDK5TL4=";
+        };
 
-      mkPackages = pkgs:
+      mkPackages =
+        pkgs:
         let
           src = mkSrc pkgs;
           # 单一内核，注入 pandoc 路径补丁使 docx 导出开箱即用；
@@ -61,7 +68,12 @@
         in
         {
           siyuan-server = pkgs.callPackage ./pkgs/siyuan-server.nix {
-            inherit version src ui kernel;
+            inherit
+              version
+              src
+              ui
+              kernel
+              ;
           };
           siyuan-client = pkgs.callPackage ./pkgs/siyuan-client.nix {
             inherit version src kernel;
@@ -71,12 +83,14 @@
 
     in
     {
-      packages = forAllSystems (system:
+      packages = forAllSystems (
+        system:
         let
           pkgs = pkgsFor system;
           packages = mkPackages pkgs;
         in
-        packages // { default = packages.siyuan-server; });
+        packages // { default = packages.siyuan-server; }
+      );
 
       # siyuan-kernel-test：内核真实测试推导（与主构建解耦），nix build .#checks.<system>.siyuan-kernel-test。
       # 作用：单次 go test ./... 原样全量跑上游内核测试（不加任何 -skip），一次收集全部失败包。
@@ -84,7 +98,8 @@
       #       资源的测试在沙箱里必红——这是打包环境差异，不是上游问题，无需上报。
       # 注意：该 check 构建失败是设计内常态，不是本仓库回归——它专门用来暴露沙箱中跑不过的测试。
       #       严禁为让 CI 变绿而加 checkFlags 跳过；版本升级验收只看 siyuan-server / siyuan-client。
-      checks = forAllSystems (system:
+      checks = forAllSystems (
+        system:
         let
           pkgs = pkgsFor system;
           packages = mkPackages pkgs;
@@ -101,28 +116,48 @@
             '';
             installPhase = "touch $out";
           };
-        });
+        }
+      );
 
       overlays.default = final: _prev: mkPackages final;
 
-      nixosModules.default = { config, lib, pkgs, ... }:
+      nixosModules.default =
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
         let
           cfg = config.services.siyuan;
           workspaceDir = "/var/lib/siyuan";
           system = pkgs.stdenv.hostPlatform.system;
-          execArgs = lib.escapeShellArgs ([
-            (lib.getExe' cfg.package "siyuan-kernel")
-            "serve"
-            "--workspace" workspaceDir
-            "--wd" "${cfg.package}/lib/siyuan"
-            "--port" (toString cfg.port)
-            "--accessAuthCode" cfg.accessAuthCode
-            "--mode" "prod"
-          ]
-          ++ lib.optionals cfg.readOnly [ "--readonly" "true" ]
-          ++ lib.optionals cfg.ssl [ "--ssl" ]
-          ++ lib.optionals (cfg.lang != null) [ "--lang" cfg.lang ]
-          ++ cfg.extraArgs);
+          execArgs = lib.escapeShellArgs (
+            [
+              (lib.getExe' cfg.package "siyuan-kernel")
+              "serve"
+              "--workspace"
+              workspaceDir
+              "--wd"
+              "${cfg.package}/lib/siyuan"
+              "--port"
+              (toString cfg.port)
+              "--accessAuthCode"
+              cfg.accessAuthCode
+              "--mode"
+              "prod"
+            ]
+            ++ lib.optionals cfg.readOnly [
+              "--readonly"
+              "true"
+            ]
+            ++ lib.optionals cfg.ssl [ "--ssl" ]
+            ++ lib.optionals (cfg.lang != null) [
+              "--lang"
+              cfg.lang
+            ]
+            ++ cfg.extraArgs
+          );
         in
         {
           options.services.siyuan = {
@@ -219,8 +254,9 @@
 
             networking.firewall.allowedTCPPorts = lib.mkIf cfg.openFirewall [ cfg.port ];
 
-            warnings = lib.optional (cfg.networkServe && cfg.accessAuthCode == "")
-              "services.siyuan：已开启 networkServe 但未设置 accessAuthCode，实例将无鉴权暴露给网络";
+            warnings = lib.optional (
+              cfg.networkServe && cfg.accessAuthCode == ""
+            ) "services.siyuan：已开启 networkServe 但未设置 accessAuthCode，实例将无鉴权暴露给网络";
 
             systemd.services.siyuan = {
               description = "SiYuan Note Server";
@@ -265,7 +301,11 @@
                 ProtectKernelTunables = true;
                 ProtectKernelModules = true;
                 ProtectControlGroups = true;
-                RestrictAddressFamilies = [ "AF_UNIX" "AF_INET" "AF_INET6" ];
+                RestrictAddressFamilies = [
+                  "AF_UNIX"
+                  "AF_INET"
+                  "AF_INET6"
+                ];
                 RestrictNamespaces = true;
                 RestrictRealtime = true;
                 RestrictSUIDSGID = true;

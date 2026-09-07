@@ -21,7 +21,7 @@ let
     src = src + "/app";
     # pnpm 11 的依赖存储格式对应 fetcherVersion = 4（含 SQLite 状态库的可复现转储）
     fetcherVersion = 4;
-    hash = "sha256-ACWwXIwuiLp/e+1dwlClzAi8ZC6oEQc3ETFK/WvVnGk=";
+    hash = "sha256-PItwjC+UnGbOu00AFKgyvWl67uxMVQv4C60v3CY6Nz0=";
   };
 in
 stdenv.mkDerivation {

@@ -24,7 +24,7 @@ buildGoModule {
   # 锁定与 go.mod 一致的工具链，避免沙箱内触发 GOTOOLCHAIN 自动下载
   go = go_1_26;
 
-  vendorHash = "sha256-x8saxKDLeZdEbTBjNXnOBU9zkliZXm6D92Mom8CUCbs=";
+  vendorHash = "sha256-wcejeym/DS2SaHZA6ITQYtrQQGnhwd6NTEb17xZXIds=";
 
   tags = kernelTags;
   ldflags = [
@@ -38,13 +38,6 @@ buildGoModule {
   # （NixOS 模块与客户端打包均按此名引用）
   postInstall = ''
     mv $out/bin/kernel $out/bin/siyuan-kernel
-  '';
-
-  # gulu 复制文件时保留 store 只读权限会导致工作区文件只读，统一改为 0644（同 nixpkgs）
-  modPostBuild = ''
-    chmod +w vendor/github.com/88250/gulu
-    substituteInPlace vendor/github.com/88250/gulu/file.go \
-        --replace-fail "os.Chmod(dest, sourceinfo.Mode())" "os.Chmod(dest, 0644)"
   '';
 
   meta = with lib; {

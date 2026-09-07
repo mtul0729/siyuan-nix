@@ -1,11 +1,10 @@
 --- a/util/pandoc.go
 +++ b/util/pandoc.go
-@@ -119,7 +119,8 @@
- 	return activePandocRuntime
+@@ -120,6 +120,7 @@
  }
-
+ 
  func InitPandoc(customPandocBinPath string) {
-+    customPandocBinPath = "@pandoc_path@"
- 	if ContainerStd != Container {
- 		return
- 	}
++	customPandocBinPath = "@pandoc_path@"
+ 	initPandoc(customPandocBinPath, getPandocVer)
+ }
+ 
