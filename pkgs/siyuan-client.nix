@@ -14,7 +14,7 @@
   makeWrapper,
   copyDesktopItems,
   makeDesktopItem,
-  electron,
+  electron_44,
   xdg-utils,
   pandoc,
   version,
@@ -28,6 +28,7 @@
 let
   inherit (stdenv.hostPlatform) system;
 
+  electron = electron_44;
   platformId =
     {
       "x86_64-linux" = "linux";
