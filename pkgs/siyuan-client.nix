@@ -88,16 +88,15 @@ stdenv.mkDerivation {
     # 把内核链接到 electron-builder 期望的位置
     mkdir kernel-${platformId}
     ln -s ${kernel}/bin/siyuan-kernel kernel-${platformId}/SiYuan-Kernel
-
-    cp -r ${electron.dist} electron-dist
-    chmod -R u+w electron-dist
   '';
 
   postBuild = ''
+    # electronDist 直接指向只读的 store：electron-builder 只读取它，所有写入都发生在
+    # appOutDir（build/linux-unpacked）里，因此不需要 nixpkgs 那套 cp -r + chmod -R u+w 的可写副本。
     electronBuilderArgs=(
       --dir
       --config electron-builder-${platformId}.yml
-      -c.electronDist=electron-dist
+      -c.electronDist=${electron.dist}
       -c.electronVersion=${electron.version}
     )
 
