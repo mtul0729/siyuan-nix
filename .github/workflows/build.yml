@@ -44,8 +44,14 @@ jobs:
         if: matrix.server
         run: nix build -L .#siyuan-server
 
+      # 本推导在沙箱里必然失败（见 AGENTS.md：它专为“一次性暴露全部失败包”而存在），
+      # 不能让它决定 run 的红绿，否则「CI 绿」这个信号等同于失效。失败结果仍留在该 step 的
+      # 日志里供人翻阅（版本升级时就看它有没有出现新的失败包）。
+      # 用 continue-on-error 而不是 if: false，是为了让后面的预取步骤仍能执行——之前这步一红
+      # 就会连带跳过 Build prefetch derivations，那两个哈希预取推导在 CI 里等于形同虚设。
       - name: Run kernel tests
         if: matrix.server
+        continue-on-error: true
         run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
 
       - name: Build prefetch derivations
