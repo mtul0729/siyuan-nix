@@ -56,6 +56,7 @@ stdenv.mkDerivation {
   meta = with lib; {
     description = "SiYuan web UI static assets";
     license = licenses.agpl3Only;
-    platforms = platforms.linux;
+    # 本包同时是客户端 pnpmDeps 的来源（见 flake.nix），而客户端支持 darwin，故一并声明
+    platforms = platforms.linux ++ platforms.darwin;
   };
 }

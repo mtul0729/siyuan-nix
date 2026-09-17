@@ -43,7 +43,8 @@ buildGoModule {
   meta = with lib; {
     description = "SiYuan kernel (reflection-focused note server)";
     license = licenses.agpl3Only;
-    platforms = platforms.linux;
+    # 客户端在 darwin 上也依赖本内核，故一并声明支持（内核是纯 Go/CGO 构建）
+    platforms = platforms.linux ++ platforms.darwin;
     mainProgram = "siyuan-kernel";
   };
 }

@@ -14,8 +14,15 @@ jobs:
         include:
           - os: ubuntu-latest
             system: x86_64-linux
+            server: true
           - os: ubuntu-24.04-arm
             system: aarch64-linux
+            server: true
+          # darwin 只能在这类 arm64 macOS runner 上构建/验证：github 的 Linux runner 编不出
+          # aarch64-darwin，我们也没有远端 darwin builder。macOS runner 计费是 Linux 的 10 倍。
+          - os: macos-14
+            system: aarch64-darwin
+            server: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -29,17 +36,20 @@ jobs:
           name: mtul
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      - name: Build siyuan-server
-        run: nix build -L .#siyuan-server
-
       - name: Build siyuan-client
         run: nix build -L .#siyuan-client
 
+      # 以下三项只有服务端所在的 Linux 平台才有（darwin 只提供 siyuan-client）
+      - name: Build siyuan-server
+        if: matrix.server
+        run: nix build -L .#siyuan-server
+
       - name: Run kernel tests
+        if: matrix.server
         run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
 
       - name: Build prefetch derivations
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && matrix.server
         run: |
           nix build -L .#siyuan-server.passthru.kernel.goModules
           nix build -L .#siyuan-server.passthru.ui.pnpmDeps

@@ -24,5 +24,9 @@ symlinkJoin {
   passthru = {
     inherit ui kernel;
   };
-  meta = kernel.meta // { mainProgram = "siyuan-kernel"; };
+  meta = kernel.meta // {
+    mainProgram = "siyuan-kernel";
+    # 服务端（含 NixOS 模块）有意只支持 Linux：darwin 上只需要客户端
+    platforms = lib.platforms.linux;
+  };
 }

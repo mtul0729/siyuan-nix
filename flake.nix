@@ -3,7 +3,10 @@
 #
 # 常用命令：
 #   nix build .#siyuan-server            构建服务器包（含 SiYuan-Kernel 内核与 appearance/stage 等静态资源）
-#   nix build .#siyuan-client            构建桌面客户端（Electron）
+#   nix build .#siyuan-client            构建桌面客户端（Electron；支持 x86_64-linux / aarch64-linux / aarch64-darwin）
+#
+# 平台范围：服务端与 NixOS 模块只提供 Linux 版，darwin 上只提供 siyuan-client
+# （客户端依赖的 kernel / ui 两个包也相应声明支持 darwin）。
 #   nix build .#siyuan-server.passthru.kernel.goModules   单独预取 Go 依赖（vendorHash 变更后用于校验）
 #   nix build .#siyuan-server.passthru.ui.pnpmDeps        单独预取 pnpm 依赖（pnpmDeps hash 变更后用于校验）
 #   nix flake update siyuan-src          升级 SiYuan 源码到新 tag
@@ -32,6 +35,7 @@
       supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
       pkgsFor = system: nixpkgs.legacyPackages.${system};
@@ -53,6 +57,7 @@
       mkPackages =
         pkgs:
         let
+          lib = pkgs.lib;
           src = mkSrc pkgs;
           # 单一内核，注入 pandoc 路径补丁使 docx 导出开箱即用；
           # 服务端闭包因此引入 pandoc（有意为之）
@@ -67,6 +72,13 @@
           ui = pkgs.callPackage ./pkgs/siyuan-ui.nix { inherit version src; };
         in
         {
+          siyuan-client = pkgs.callPackage ./pkgs/siyuan-client.nix {
+            inherit version src kernel;
+            pnpmDeps = ui.pnpmDeps;
+          };
+        }
+        # 服务端（连同它承载的 NixOS 模块）只提供 Linux 版：darwin 上只需要客户端
+        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           siyuan-server = pkgs.callPackage ./pkgs/siyuan-server.nix {
             inherit
               version
@@ -74,10 +86,6 @@
               ui
               kernel
               ;
-          };
-          siyuan-client = pkgs.callPackage ./pkgs/siyuan-client.nix {
-            inherit version src kernel;
-            pnpmDeps = ui.pnpmDeps;
           };
         };
 
@@ -89,7 +97,11 @@
           pkgs = pkgsFor system;
           packages = mkPackages pkgs;
         in
-        packages // { default = packages.siyuan-server; }
+        packages
+        // {
+          # Linux 上是服务端，darwin 上只有客户端
+          default = packages.siyuan-server or packages.siyuan-client;
+        }
       );
 
       # siyuan-kernel-test：内核真实测试推导（与主构建解耦），nix build .#checks.<system>.siyuan-kernel-test。
@@ -98,15 +110,15 @@
       #       资源的测试在沙箱里必红——这是打包环境差异，不是上游问题，无需上报。
       # 注意：该 check 构建失败是设计内常态，不是本仓库回归——它专门用来暴露沙箱中跑不过的测试。
       #       严禁为让 CI 变绿而加 checkFlags 跳过；版本升级验收只看 siyuan-server / siyuan-client。
+      # 只在提供 siyuan-server 的平台给出（该推导由服务端包的 passthru.kernel 派生，而服务端只有 Linux 版）。
       checks = forAllSystems (
         system:
         let
           pkgs = pkgsFor system;
           packages = mkPackages pkgs;
-          kernel = packages.siyuan-server.passthru.kernel;
         in
-        {
-          siyuan-kernel-test = kernel.overrideAttrs {
+        nixpkgs.lib.optionalAttrs (packages ? siyuan-server) {
+          siyuan-kernel-test = packages.siyuan-server.passthru.kernel.overrideAttrs {
             pname = "siyuan-kernel-test";
             doCheck = true;
             checkPhase = ''
@@ -165,8 +177,8 @@
 
             package = lib.mkOption {
               type = lib.types.package;
-              default = self.packages.${system}.default;
-              defaultText = lib.literalExpression "siyuan-nix.packages.\${system}.default";
+              default = self.packages.${system}.siyuan-server;
+              defaultText = lib.literalExpression "siyuan-nix.packages.\${system}.siyuan-server";
               description = "SiYuan 服务器包，需包含 bin/siyuan-kernel 与 lib/siyuan 静态资源目录";
             };
 

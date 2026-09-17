@@ -2,18 +2,20 @@
 
 Nix flake packaging SiYuan (note server + Electron client + NixOS module) from the upstream `siyuan-note/siyuan` tag. Layout: `flake.nix` (wiring, tag/version, NixOS module) + `pkgs/siyuan-{kernel,ui,server,client}.nix` + `scripts/update.sh` (version bump entrypoint). Human-facing docs live in `README.md`; deeper background in `docs/updating.md` (update SOP, FOD hash invariant) and `docs/upstream-issues.md` (deferred upstream reports).
 
+**Platform scope**: the server package (and therefore the NixOS module and its kernel-test check) is Linux-only; the desktop client also builds on `aarch64-darwin`. The two packages the client depends on (`siyuan-kernel`, `siyuan-ui`) declare darwin support for that reason, even though nothing else uses them there — see the darwin gotcha below.
+
 ## Commands
 
 ```bash
-nix build -L .#siyuan-server         # server package
-nix build -L .#siyuan-client         # Electron desktop client
-nix build -L .#checks.<system>.siyuan-kernel-test   # kernel go test (via passthru.kernel + overrideAttrs)
+nix build -L .#siyuan-server         # server package (Linux only)
+nix build -L .#siyuan-client         # Electron desktop client (linux + aarch64-darwin)
+nix build -L .#checks.<system>.siyuan-kernel-test   # kernel go test (via passthru.kernel + overrideAttrs; Linux only)
 nix build -L .#siyuan-server.passthru.kernel   # kernel derivation (no tests)
-nix flake check --no-build --all-systems   # eval-only validation of both arches
+nix flake check --no-build --all-systems   # eval-only validation of all three systems
 ./scripts/update.sh vX.Y.Z           # version bump: rewrites tag + resets all three FOD hashes
 ```
 
-There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds both packages on `x86_64-linux` and `aarch64-linux` (ubuntu-latest / ubuntu-24.04-arm matrix) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`.
+There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the client and its inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`.
 
 ## Update / hash workflow
 
@@ -32,5 +34,6 @@ Run `./scripts/update.sh vX.Y.Z`: it rewrites `tag` and resets the `src` hash in
 - There is a single kernel variant shared by server and client, patched via `pkgs/set-pandoc-path.patch` (`replaceVars @pandoc_path@`) to use nixpkgs pandoc directly — the server closure intentionally contains pandoc (docx export works out of the box). Don't "optimize" it away.
 - Client reuses `ui.pnpmDeps` (same app lockfile); don't add a second `fetchPnpmDeps`.
 - Client packaging: electron-builder runs with `--dir`, kernel symlinked as `SiYuan-Kernel`. When upstream changes `app/` layout or `InitPandoc`, diff against the nixpkgs `pkgs/by-name/si/siyuan` package as a reference for what changed. We deliberately do NOT consume upstream's vendored prebuilt pandoc zips: `postConfigure` deletes them and drops in our own placeholder archive, so no unaudited binary is ever extracted (no untrusted archive into the `unzipper` parser) or `chmod +x`'ed during the build — electron-builder's `extraResources` only names the archive and `app/scripts/afterPack.js` only checks that the extracted `bin/pandoc` is a non-empty regular file. `installPhase` then replaces the extracted `resources/pandoc/` with a store symlink, since the shared kernel uses nix pandoc via `set-pandoc-path.patch`. That's a deliberate ~209 MiB dedupe, not a bug, and it fails closed: if the `--dir` assumption ever breaks, you get no pandoc rather than a silently shipped unaudited binary.
-- Porting the client recipe to nixpkgs must not forget darwin: this flake builds Linux only, but nixpkgs also builds `aarch64-darwin`, where (1) `pandocArchive` needs the `darwin-arm64` entry (`pandoc-darwin-arm64.zip`; upstream's `electron-builder-darwin.yml` additionally names `pandoc-darwin-amd64.zip`), and (2) `afterPack.js`'s `getPackagedResourcePath()` resolves darwin to `<productFilename>.app/Contents/Resources`, so the `installPhase` dedupe (`rm -rf` + symlink) must target `<Product>.app/Contents/Resources/pandoc` there instead of `$out/share/siyuan/resources`. The placeholder archive itself is platform-agnostic: afterPack looks for `bin/pandoc` on every platform except win32 (`bin/pandoc.exe`), and no Nix platform builds Windows. Our zip name table is Linux-only on purpose: `platformId` gates it and a missing key throws instead of silently naming the wrong archive.
+- darwin client support (`pkgs/siyuan-client.nix`): `platformId` maps `aarch64-darwin` → `darwin-arm64`, which is both the `electron-builder-<id>.yml` suffix and the kernel dir name upstream's `extraResources` expects (`from: "kernel-<id>"`). Three darwin-specific things to keep intact: `pandocArchive`'s `darwin-arm64` entry (`pandoc-darwin-arm64.zip`; upstream also has an `x86_64-darwin` pair we don't build), `darwin.autoSignDarwinBinariesHook` in `nativeBuildInputs` (the packaging copies Mach-O binaries out of the read-only store, which invalidates their signatures), and `-c.mac.identity=null` (upstream's darwin ymls sign with their own certificate and reference `../../entitlements.mas.plist` / `../../SiYuan.provisionprofile`, neither of which exists in the repo). The `installPhase` pandoc dedupe targets a different path per platform: `afterPack.js`'s `getPackagedResourcePath()` resolves darwin to `<productFilename>.app/Contents/Resources`, so it is `<Product>.app/Contents/Resources/pandoc` instead of `$out/share/siyuan/resources/pandoc`.
+- `pnpmBuildHook` intentionally runs on **both** platforms, unlike nixpkgs which gates it to `isLinux`: webpack writes `app/stage/build`, which is `.gitignore`d and therefore absent from the source tarball — skip the build and the app ships without its JS bundles. (nixpkgs' darwin package is incomplete for this reason.) The darwin path is eval-verified (`nix flake check --no-build --all-systems`) and the drv instantiates, but it has never actually been *built*: no Linux machine can, which is why CI has the `macos-14` job.
 - Version upgrades touch exactly one place: `tag` in `flake.nix` (+ hashes per above).

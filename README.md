@@ -1,6 +1,6 @@
 # siyuan-nix
 
-以 [siyuan-note/siyuan](https://github.com/siyuan-note/siyuan) 官方 tag 为源构建的 Nix flake：思源笔记服务端（内核 + 静态资源）、Electron 桌面客户端，以及一个 NixOS 服务模块。支持 `x86_64-linux` 与 `aarch64-linux`，产物推送至 cachix `mtul`。
+以 [siyuan-note/siyuan](https://github.com/siyuan-note/siyuan) 官方 tag 为源构建的 Nix flake：思源笔记服务端（内核 + 静态资源）、Electron 桌面客户端，以及一个 NixOS 服务模块。服务端与 NixOS 模块支持 `x86_64-linux` / `aarch64-linux`；桌面客户端额外支持 `aarch64-darwin`。产物推送至 cachix `mtul`。
 
 ## 安装
 
@@ -36,19 +36,19 @@ services.siyuan = {
 ### 桌面客户端 / 直接使用包
 
 ```bash
-nix build github:mtul0729/siyuan-nix#siyuan-client   # Electron 客户端
-nix build github:mtul0729/siyuan-nix                 # 默认输出 = 服务端包
+nix build github:mtul0729/siyuan-nix#siyuan-client   # Electron 客户端（linux / aarch64-darwin）
+nix build github:mtul0729/siyuan-nix                 # 默认输出：Linux 上是服务端包，darwin 上是客户端
 nix profile install github:mtul0729/siyuan-nix#siyuan-client
 ```
 
 ## 常用命令
 
 ```bash
-nix build -L .#siyuan-server                        # 服务端包
-nix build -L .#siyuan-client                        # 桌面客户端
+nix build -L .#siyuan-server                        # 服务端包（仅 Linux）
+nix build -L .#siyuan-client                        # 桌面客户端（linux / aarch64-darwin）
 nix build -L .#checks.x86_64-linux.siyuan-kernel-test    # 内核 go 测试（独立于主构建）
-nix flake check --no-build --all-systems            # 双架构纯求值校验
-./scripts/update.sh v3.8.2                          # 升级版本（详见脚本头注释）
+nix flake check --no-build --all-systems            # 三系统纯求值校验
+./scripts/update.sh v3.8.3                          # 升级版本（详见脚本头注释）
 ```
 
 维护者文档：[AGENTS.md](AGENTS.md)（仓库结构与工作流）、[docs/updating.md](docs/updating.md)（升级 SOP 与哈希不变量）、[docs/upstream-issues.md](docs/upstream-issues.md)（暂缓上报的上游问题）。
