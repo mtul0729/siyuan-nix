@@ -37,7 +37,10 @@ let
     }
     .${system} or (throw "Unsupported platform: ${system}");
 
-  # electron-builder 配置期望的当前平台 pandoc 压缩包名
+  # electron-builder 配置期望的当前平台 pandoc 压缩包名，必须与 app/electron-builder-<platform>.yml
+  # 的 from: 一致。本 flake 只构建 linux，故只有两条；nixpkgs 还构建 aarch64-darwin（对应
+  # "darwin-arm64" / pandoc-darwin-arm64.zip，上游另有 darwin-amd64），移植时补上即可——
+  # 键被 platformId 限定，缺键会直接抛错，不会静默串名。
   pandocArchive =
     {
       "linux" = "pandoc-linux-amd64.zip";
