@@ -1,5 +1,5 @@
 # SiYuan 桌面客户端（Electron），打包方式参照 nixpkgs siyuan 包：
-# - 用 nixpkgs 的 electron（electron.dist）替代官方下载的二进制；
+# - 用 nixpkgs 的 electron（electron.dist，复制成一份可写副本后交给 electron-builder）替代官方下载的二进制；
 # - 用仓库自带的 electron-builder-<platform>.yml 以 --dir 模式打包（免自解压），再包一层 wrapper；
 # - 不用上游自带的预编译 pandoc：自行放一个占位 zip 供 afterPack 解压，该副本运行时用不到
 #   （内核经补丁直接用 nix pandoc），installPhase 会把解压结果换成 store 符号链接；
@@ -111,15 +111,22 @@ stdenv.mkDerivation {
     # 把内核链接到 electron-builder 期望的位置
     mkdir kernel-${platformId}
     ln -s ${kernel}/bin/siyuan-kernel kernel-${platformId}/SiYuan-Kernel
+
+    # electron-builder 需要一份**可写**的 electron dist，不能直接指向只读 store：
+    # darwin 打包会就地改写 .app 内各 Helper 的 Info.plist
+    # （app-builder-lib/src/electron/electronMac.ts createMacApp → util/plist.ts savePlistFile），
+    # 而从 0444 的 store 文件复制出来的副本也是只读，写入就 EACCES：
+    #   EACCES ... Electron Helper (Renderer).app/Contents/Info.plist
+    # （CI 实测过）。nixpkgs 里的 cp -r + chmod -R u+w 就是这个原因，别当冗余删掉。
+    cp -r ${electron.dist} electron-dist
+    chmod -R u+w electron-dist
   '';
 
   postBuild = ''
-    # electronDist 直接指向只读的 store：electron-builder 只读取它，所有写入都发生在
-    # appOutDir 里，因此不需要 nixpkgs 那套 cp -r + chmod -R u+w 的可写副本。
     electronBuilderArgs=(
       --dir
       --config electron-builder-${platformId}.yml
-      -c.electronDist=${electron.dist}
+      -c.electronDist=electron-dist
       -c.electronVersion=${electron.version}
       ${lib.optionalString isDarwin "-c.mac.identity=null"}
     )
