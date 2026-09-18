@@ -52,14 +52,3 @@ nix flake check --no-build --all-systems            # 三系统纯求值校验
 ```
 
 维护者文档：[AGENTS.md](AGENTS.md)（仓库结构与工作流）、[docs/updating.md](docs/updating.md)（升级 SOP 与哈希不变量）、[docs/upstream-issues.md](docs/upstream-issues.md)（暂缓上报的上游问题）。
-
-## FAQ：启动弹「工作空间下的文件正在被第三方软件占用」？
-
-这是退出码 26 的**固定文案**，而退出码 26 涵盖一切文件系统错误——不一定是同步盘/杀毒软件。
-
-真实原因看工作空间日志 `temp/siyuan.log`：若出现 `filelock.go:91: copy [...] failed: open .../conf/appearance/...: permission denied`，即为旧版打包的已知缺陷（store 只读权限被复制进工作空间，下次启动覆盖失败）。
-
-- **3.8.1 及更早的旧包**：应急恢复 `chmod -R u+w <工作空间>/conf/appearance`；注意一次性有效（成功启动一次后会被再次改为只读），彻底解决请升级到包含 gulu 权限替换修复的构建。
-- **新包仍复现**：按 AGENTS.md 排查 FOD 哈希是否被静默跳过（见 docs/updating.md）。
-
-其他退出码参考（来自 github.com/siyuan-note/logging）：20=数据库不可用、21=端口不可用、22=安全风险、24=工作空间被锁定、25=初始化工作空间失败、26=文件系统错误。
