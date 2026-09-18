@@ -16,7 +16,7 @@ nix flake check --no-build --all-systems   # eval-only validation of all three s
 ./scripts/update.py --print-pins     # print the currently pinned tag/hashes as JSON
 ```
 
-There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the client and its inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`.
+There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the client and its inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`. The auto-update workflow additionally needs a GitHub App (repo secrets `APP_ID` + `APP_PRIVATE_KEY`; permissions `Contents: Read and write` + `Pull requests: Read and write`, nothing else) — its token is what makes the upgrade PR's `pull_request` events run `build.yml` automatically; with the built-in `GITHUB_TOKEN` such a PR sits at `action_required` waiting for manual approval.
 
 ## Update / hash workflow
 
@@ -26,7 +26,7 @@ Run `./scripts/update.py [vX.Y.Z]` (Python 3, stdlib only): it rewrites `tag`, t
 - Prefetch derivations exist for this: `.#siyuan-server.passthru.kernel.goModules` and `.#siyuan-server.passthru.ui.pnpmDeps`.
 - Full rationale and step-by-step: `docs/updating.md`.
 
-Automated path: `.github/workflows/update.yml` runs daily on the default branch (and via `workflow_dispatch`, optionally with an explicit `tag`). It runs `scripts/update.py` (which detects the newest upstream *stable* tag via `git ls-remote`, ignoring `-alpha`/`-beta` and non-version tags), skips if nothing changed, and otherwise smoke-builds the server and opens an `auto-update/siyuan-<tag>` PR against `main`; the real cross-platform acceptance is still `build.yml` firing on that PR. `nix-update` stays unusable here (crashes on `unsafeGetAttrPos "version"`, even with `--version=skip`) — see `docs/updating.md`.
+Automated path: `.github/workflows/update.yml` runs daily on the default branch (and via `workflow_dispatch`, optionally with an explicit `tag`). It runs `scripts/update.py` (which detects the newest upstream *stable* tag via `git ls-remote`, ignoring `-alpha`/`-beta` and non-version tags), skips if nothing changed, and otherwise commits to an `auto-update/siyuan-<tag>` branch and opens a PR against `main` as a GitHub App (`<app>[bot]`), so `build.yml` fires on that PR on its own. The real cross-platform acceptance is still `build.yml` running on that PR; a human merges. `nix-update` stays unusable here (crashes on `unsafeGetAttrPos "version"`, even with `--version=skip`) — see `docs/updating.md`.
 
 ## Gotchas
 

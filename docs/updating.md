@@ -26,10 +26,11 @@
 `.github/workflows/update.yml` 把上面这套 SOP 自动化：每天 03:17 UTC 检查一次（也可 `workflow_dispatch`，可传入显式 `tag`）。流程：
 
 1. `python3 scripts/update.py`：脚本内部检测上游最新 **稳定** tag（`git ls-remote` + `vX.Y.Z` 正则，滤掉 `-alpha`/`-beta` 与 `v202205311650-dev` 这类非版本 tag），与现行 tag 相同则直接退出。
-2. 有变化则冒烟构建 `siyuan-server`（`continue-on-error`，结果写进 PR body）。
-3. 提交到 `auto-update/siyuan-<tag>` 分支并开 PR。
+2. 提交到 `auto-update/siyuan-<tag>` 分支并开 PR（同一 tag 已有开启的 PR 时跳过，避免重复开单）。
 
-真正的跨平台验收仍是 `build.yml` 在该 PR 上的运行（含 `aarch64-darwin`）；同一 tag 已有开启的 PR 时直接跳过，避免重复开单。
+真正的跨平台验收仍是 `build.yml` 在该 PR 上的运行（含 `aarch64-darwin`）；人工点合并。
+
+**身份与秘钥**：workflow 用 GitHub App 令牌而非 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不触发其它 workflow，那样 PR 上的 `build.yml` 会停在 `action_required` 需人工批准。因此需一个 GitHub App（repo secrets `APP_ID` + `APP_PRIVATE_KEY`；权限只给 `Contents: Read and write` 与 `Pull requests: Read and write`），这样 PR 作者是 `<app>[bot]`、其 `pull_request` 事件能自动触发 CI。App 的私钥一旦丢失/轮换，重新创建并更新这两个 secret 即可。
 
 > 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
 > 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。
