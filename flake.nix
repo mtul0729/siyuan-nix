@@ -55,8 +55,14 @@
         };
 
       mkPackages =
-        pkgs:
+        {
+          pkgs,
+          system,
+        }:
         let
+          # 平台判断用纯函数从 system 推导，绝不触碰 pkgs.stdenv / final：
+          # overlay 求值脊上读取 final 派生值会触发 nixpkgs fixpoint 求值循环。
+          isLinux = (nixpkgs.lib.systems.elaborate { inherit system; }).isLinux;
           src = mkSrc pkgs;
           # 单一内核，注入 pandoc 路径补丁使 docx 导出开箱即用；
           # 服务端闭包因此引入 pandoc（有意为之）
@@ -76,8 +82,8 @@
             pnpmDeps = ui.pnpmDeps;
           };
         }
-        # 服务端（连同它承载的 NixOS 模块）只提供 Linux 版：darwin 上只需要客户端
-        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # 服务端（连同它承载的 NixOS 模块）只提供 Linux 版：darwin 上只需要客户端。
+        // nixpkgs.lib.optionalAttrs isLinux {
           siyuan-server = pkgs.callPackage ./pkgs/siyuan-server.nix {
             inherit
               version
@@ -94,7 +100,7 @@
         system:
         let
           pkgs = pkgsFor system;
-          packages = mkPackages pkgs;
+          packages = mkPackages { inherit pkgs system; };
         in
         packages
         // {
@@ -114,7 +120,7 @@
         system:
         let
           pkgs = pkgsFor system;
-          packages = mkPackages pkgs;
+          packages = mkPackages { inherit pkgs system; };
         in
         nixpkgs.lib.optionalAttrs (packages ? siyuan-server) {
           siyuan-kernel-test = packages.siyuan-server.passthru.kernel.overrideAttrs {
@@ -130,7 +136,12 @@
         }
       );
 
-      overlays.default = final: _prev: mkPackages final;
+      overlays.default =
+        final: prev:
+        mkPackages {
+          pkgs = final;
+          system = prev.stdenv.hostPlatform.system;
+        };
 
       nixosModules.default =
         {
