@@ -41,7 +41,7 @@
       pkgsFor = system: nixpkgs.legacyPackages.${system};
 
       # SiYuan 发布 tag；version 自动去除 v 前缀，升级时只需修改这一处
-      tag = "v3.8.3";
+      tag = "v3.8.4";
       version = nixpkgs.lib.removePrefix "v" tag;
 
       # 以 GitHub 上的官方发布源码为构建输入
@@ -51,7 +51,7 @@
           owner = "siyuan-note";
           repo = "siyuan";
           rev = tag;
-          hash = "sha256-+0CO1E0w0XCBRypjZftB0kRe01ebWI/piOySmDK5TL4=";
+          hash = "sha256-6UwmOxGyK4JC52TP88sE2JcYX8lOHdqtJmzWFdj350M=";
         };
 
       mkPackages =
