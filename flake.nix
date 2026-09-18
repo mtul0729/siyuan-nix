@@ -57,7 +57,6 @@
       mkPackages =
         pkgs:
         let
-          lib = pkgs.lib;
           src = mkSrc pkgs;
           # 单一内核，注入 pandoc 路径补丁使 docx 导出开箱即用；
           # 服务端闭包因此引入 pandoc（有意为之）
@@ -78,7 +77,7 @@
           };
         }
         # 服务端（连同它承载的 NixOS 模块）只提供 Linux 版：darwin 上只需要客户端
-        // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           siyuan-server = pkgs.callPackage ./pkgs/siyuan-server.nix {
             inherit
               version
