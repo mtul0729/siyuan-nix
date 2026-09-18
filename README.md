@@ -48,7 +48,10 @@ nix build -L .#siyuan-server                        # 服务端包（仅 Linux�
 nix build -L .#siyuan-client                        # 桌面客户端（linux / aarch64-darwin）
 nix build -L .#checks.x86_64-linux.siyuan-kernel-test    # 内核 go 测试（独立于主构建）
 nix flake check --no-build --all-systems            # 三系统纯求值校验
-./scripts/update.sh v3.8.3                          # 升级版本（详见脚本头注释）
+./scripts/update.py [vX.Y.Z]                         # 升级 tag + 轮换三个 FOD 哈希（详见脚本头注释）
+./scripts/update.py --print-pins                     # 打印当前 pin 的 tag/哈希（JSON）
 ```
+
+升级通常无需手动跑：`.github/workflows/update.yml` 每天自动追踪上游最新稳定版，轮换哈希后开 PR 交由 CI 验证。
 
 维护者文档：[AGENTS.md](AGENTS.md)（仓库结构与工作流）、[docs/updating.md](docs/updating.md)（升级 SOP 与哈希不变量）、[docs/upstream-issues.md](docs/upstream-issues.md)（暂缓上报的上游问题）。

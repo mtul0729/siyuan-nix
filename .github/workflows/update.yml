@@ -1,0 +1,129 @@
+name: Auto update SiYuan
+
+# 自动把 SiYuan 追到上游最新稳定版：scripts/update.py 负责升 tag + 轮换三个 FOD 哈希，
+# 本 workflow 只做编排（检测改动 → 冒烟构建 → 开 PR），真正的跨平台验收交给 build.yml。
+#
+# 注意：schedule 触发要求本文件已存在于默认分支（main）。
+on:
+  schedule:
+    # 每天 03:17 UTC 检查一次
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '目标 tag（如 v3.9.0）；留空则自动取上游最新稳定版'
+        required: false
+        default: ''
+
+# 同一时刻只跑一个，避免两次运行同时改 tag/开 PR；不取消进行中的运行（构建很贵）
+concurrency:
+  group: auto-update-siyuan
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - uses: cachix/cachix-action@v17
+        with:
+          name: mtul
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Bump tag and rotate FOD hashes
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$INPUT_TAG" ]]; then
+            python3 scripts/update.py "$INPUT_TAG"
+          else
+            python3 scripts/update.py
+          fi
+
+      - name: Detect changes
+        id: diff
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "已是最新稳定版，无需升级。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve pins, branch and existing PR
+        id: target
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/update.py --print-pins > pins.json
+          tag="$(jq -r .tag pins.json)"
+          branch="auto-update/siyuan-$tag"
+          {
+            echo "tag=$tag"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+          exists=false
+          if [[ -n "$(gh pr list --state open --head "$branch" --json number --jq '.[].number')" ]]; then
+            exists=true
+          fi
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+
+      # 冒烟构建：服务端在 Linux runner 上可完整构建，作为哈希解析的自检。
+      # 允许失败并把结果写进 PR body —— 平台相关的真实验收仍以 build.yml（含 aarch64-darwin）为准。
+      - name: Smoke-build siyuan-server
+        id: smoke
+        if: steps.diff.outputs.changed == 'true' && steps.target.outputs.exists != 'true'
+        continue-on-error: true
+        run: nix build -L .#siyuan-server
+
+      - name: Commit, push and open PR
+        if: steps.diff.outputs.changed == 'true' && steps.target.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ steps.target.outputs.tag }}'
+          branch='${{ steps.target.outputs.branch }}'
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
+          git commit -m "siyuan: bump to $tag"
+          # 这些分支归自动化所有，force 覆盖以保持幂等（open PR 已在上游闸门跳过，不会误覆盖人工改动）
+          git push --force origin "$branch"
+
+          smoke='siyuan-server 冒烟构建通过。'
+          if [[ '${{ steps.smoke.outcome }}' != 'success' ]]; then
+            smoke='⚠️ siyuan-server 冒烟构建失败，请查看本 workflow 运行日志。'
+          fi
+
+          {
+            printf '自动升级到上游稳定版 `%s`。\n\n' "$tag"
+            printf '由 `.github/workflows/update.yml` 调用 `scripts/update.py` 生成（升 tag + 占位 → 真实哈希轮换）。\n\n'
+            printf '| FOD | 位置 | 值 |\n'
+            printf '| --- | --- | --- |\n'
+            printf '| `src` | `flake.nix` | `%s` |\n' "$(jq -r .src pins.json)"
+            printf '| `vendorHash` | `pkgs/siyuan-kernel.nix` | `%s` |\n' "$(jq -r .vendorHash pins.json)"
+            printf '| `pnpmDeps` | `pkgs/siyuan-ui.nix` | `%s` |\n\n' "$(jq -r .pnpmDeps pins.json)"
+            printf '%s\n\n' "$smoke"
+            printf '验收以 CI 为准：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿。\n'
+            printf '`siyuan-kernel-test` 跑红是设计内常态（沙箱缺少 `../../app/*` 资源），不是本次升级的回归。\n'
+          } > pr-body.md
+
+          gh pr create --base main --head "$branch" \
+            --title "siyuan: bump to $tag" \
+            --body-file pr-body.md

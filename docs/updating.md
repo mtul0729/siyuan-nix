@@ -3,18 +3,33 @@
 ## 标准流程
 
 ```bash
-./scripts/update.sh v3.8.2        # 改 flake.nix 的 tag + src，三个 FOD 哈希（src/vendor/pnpm）重置为占位符
-git commit -m "Bump siyuan to 3.8.2"
-git push origin dev               # 建议 dev 分支验证；main 的 push 会自动触发 CI
-gh workflow run build.yml --ref dev   # 非 push 触发分支需手动 dispatch
-# CI 首轮必失败：从日志取三个 got: sha256-...（架构无关，两个 matrix 一致）
-#   srcHash       -> flake.nix（mkSrc，fetchFromGitHub 的 hash）
-#   vendorHash    -> pkgs/siyuan-kernel.nix
-#   pnpmDeps.hash -> pkgs/siyuan-ui.nix
-# 回填后再推，CI 绿后合并 main
+./scripts/update.py              # 升到上游最新稳定版；也可传显式 tag，如 v3.9.0
+./scripts/update.py --force      # tag 未变也重算哈希（改了影响 FOD 内容的东西后要用）
+./scripts/update.py --build      # 升级后再冒烟构建 siyuan-server
+./scripts/update.py --print-pins # 以 JSON 打印当前 pin 的 tag 与三个哈希
 ```
 
-哈希无法离线预计算；本地无代理访问 proxy.golang.org 会 EOF，因此按仓库惯例走 CI 日志迭代。
+`scripts/update.py`（Python 3，仅标准库）一步完成「升 tag + 轮换三个 FOD 哈希」：先把 tag 与三个哈希写成占位符，再解析出真值写回。任何一步失败都会把四个 pin 回滚到原状，不会留下「一半占位、一半真实」的仓库。哈希无法离线预计算，所以需要联网 + nix。
+
+三个哈希的解析方式：
+
+| FOD | 位置 | 解析方式 |
+| --- | --- | --- |
+| `src` | `flake.nix`（`fetchFromGitHub.hash`） | `nix-prefetch-url --unpack`（已核对等价于 `fetchFromGitHub`） |
+| `vendorHash` | `pkgs/siyuan-kernel.nix` | 占位哈希触发构建，从 `hash mismatch ... got:` 取真值 |
+| `pnpmDeps` | `pkgs/siyuan-ui.nix` | 同上 |
+
+正则锚定到语义块（`fetchFromGitHub { ... hash = ... }`、`vendorHash`、`fetchPnpmDeps { ... }`）且强制断言恰好匹配 1 处，不匹配就报错——绝不像写死缩进的 `sed` 那样静默跳过。手动迭代时（改完 Push 再推）仍可看 CI 日志里的 `got: sha256-...`，架构无关、两个 matrix 一致。
+
+### 自动升级（GitHub Actions）
+
+`.github/workflows/update.yml` 把上面这套 SOP 自动化：每天 03:17 UTC 检查一次（也可 `workflow_dispatch`，可传入显式 `tag`）。流程：
+
+1. `python3 scripts/update.py`：脚本内部检测上游最新 **稳定** tag（`git ls-remote` + `vX.Y.Z` 正则，滤掉 `-alpha`/`-beta` 与 `v202205311650-dev` 这类非版本 tag），与现行 tag 相同则直接退出。
+2. 有变化则冒烟构建 `siyuan-server`（`continue-on-error`，结果写进 PR body）。
+3. 提交到 `auto-update/siyuan-<tag>` 分支并开 PR。
+
+真正的跨平台验收仍是 `build.yml` 在该 PR 上的运行（含 `aarch64-darwin`）；同一 tag 已有开启的 PR 时直接跳过，避免重复开单。
 
 > 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
 > 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。
@@ -34,8 +49,8 @@ gh workflow run build.yml --ref dev   # 非 push 触发分支需手动 dispatch
 
 > **声明的 FOD 哈希必须永远等于「当前构建脚本实际产出」的树哈希。**
 > 任何影响 FOD 内容的改动（`modPostBuild`、go.mod 依赖、pnpm lockfile、fetcher 版本……）之后，
-> 即使没有版本升级，也必须重走占位→got:→回填流程。
+> 即使没有版本升级，也必须重走占位→got:→回填流程（`./scripts/update.py --force`）。
 
 ## nix-update 为何不适用于本仓库
 
-`nix-update` 要求包上存在可定位的字面量 `version` 属性（内部用 `builtins.unsafeGetAttrPos "version"`），而本仓库 version 由 flake.nix 的 `tag` 派生、经 callPackage 以函数参数注入，位置为 null，nix-update 1.16.0 直接求值崩溃。若为迁就它把字面量版本散进各 `pkgs/*.nix`，会破坏「tag 单一来源」设计并引入 tag/version 漂移风险——不值得。若未来上游结构允许再评估。
+`nix-update` 要求包上存在可定位的字面量 `version` 属性（内部用 `builtins.unsafeGetAttrPos "version"`），而本仓库 version 由 flake.nix 的 `tag` 派生、经 callPackage 以函数参数注入，位置为 null，nix-update 1.16.0 直接求值崩溃（`expected a set but found null`）。**用 `--version=skip` 也绕不过**：该步只跳过版本更新，求值阶段依旧执行 `unsafeGetAttrPos "version"`，2026-09 实测同样崩。若为迁就它把字面量版本散进各 `pkgs/*.nix`，会破坏「tag 单一来源」设计并引入 tag/version 漂移风险——不值得。若未来上游结构允许再评估。

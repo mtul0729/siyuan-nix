@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Nix flake packaging SiYuan (note server + Electron client + NixOS module) from the upstream `siyuan-note/siyuan` tag. Layout: `flake.nix` (wiring, tag/version, NixOS module) + `pkgs/siyuan-{kernel,ui,server,client}.nix` + `scripts/update.sh` (version bump entrypoint). Human-facing docs live in `README.md`; deeper background in `docs/updating.md` (update SOP, FOD hash invariant) and `docs/upstream-issues.md` (deferred upstream reports).
+Nix flake packaging SiYuan (note server + Electron client + NixOS module) from the upstream `siyuan-note/siyuan` tag. Layout: `flake.nix` (wiring, tag/version, NixOS module) + `pkgs/siyuan-{kernel,ui,server,client}.nix` + `scripts/update.py` (tag bump + FOD hash rotation). Human-facing docs live in `README.md`; deeper background in `docs/updating.md` (update SOP, FOD hash invariant) and `docs/upstream-issues.md` (deferred upstream reports).
 
 **Platform scope**: the server package (and therefore the NixOS module and its kernel-test check) is Linux-only; the desktop client also builds on `aarch64-darwin`. The two packages the client depends on (`siyuan-kernel`, `siyuan-ui`) declare darwin support for that reason, even though nothing else uses them there — see the darwin gotcha below.
 
@@ -12,18 +12,21 @@ nix build -L .#siyuan-client         # Electron desktop client (linux + aarch64-
 nix build -L .#checks.<system>.siyuan-kernel-test   # kernel go test (via passthru.kernel + overrideAttrs; Linux only)
 nix build -L .#siyuan-server.passthru.kernel   # kernel derivation (no tests)
 nix flake check --no-build --all-systems   # eval-only validation of all three systems
-./scripts/update.sh vX.Y.Z           # version bump: rewrites tag + resets all three FOD hashes
+./scripts/update.py [vX.Y.Z]       # bump tag + rotate the three FOD hashes (needs network + nix)
+./scripts/update.py --print-pins     # print the currently pinned tag/hashes as JSON
 ```
 
 There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the client and its inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`.
 
 ## Update / hash workflow
 
-Run `./scripts/update.sh vX.Y.Z`: it rewrites `tag` and resets the `src` hash in `flake.nix`, plus `vendorHash` (pkgs/siyuan-kernel.nix) and `pnpmDeps.hash` (pkgs/siyuan-ui.nix) to a placeholder. These hashes have no offline way to be precomputed — push, then read `got: sha256-...` from the CI failure log and fill all three in; push again until green. Don't forget the `src` hash on a tag bump: `fetchFromGitHub`'s `hash` in `flake.nix` is a FOD too and the old value silently fails for the new tag. The user prefers iterating via GitHub Actions logs over local builds.
+Run `./scripts/update.py [vX.Y.Z]` (Python 3, stdlib only): it rewrites `tag`, then rotates the three fixed-output hash pins — `src` in `flake.nix` (`fetchFromGitHub.hash`), `vendorHash` in pkgs/siyuan-kernel.nix and `pnpmDeps` in pkgs/siyuan-ui.nix. The hashes have no offline way to be precomputed, so the script resolves them itself: it writes a placeholder hash (the only way to force a real FOD build instead of a silent store-path collision), then reads the true value from `nix`'s `hash mismatch ... got: sha256-...` output; `src` is prefetched instead with `nix-prefetch-url --unpack` (verified to equal `fetchFromGitHub.hash`). Any failure rolls all four pins back. Pass `--force` to rotate hashes without a tag change, `--build` to smoke-build the server afterwards. The user prefers iterating via GitHub Actions logs over local builds.
 
 - The pnpm hash is arch-independent; both matrix jobs print the same value.
 - Prefetch derivations exist for this: `.#siyuan-server.passthru.kernel.goModules` and `.#siyuan-server.passthru.ui.pnpmDeps`.
 - Full rationale and step-by-step: `docs/updating.md`.
+
+Automated path: `.github/workflows/update.yml` runs daily on the default branch (and via `workflow_dispatch`, optionally with an explicit `tag`). It runs `scripts/update.py` (which detects the newest upstream *stable* tag via `git ls-remote`, ignoring `-alpha`/`-beta` and non-version tags), skips if nothing changed, and otherwise smoke-builds the server and opens an `auto-update/siyuan-<tag>` PR against `main`; the real cross-platform acceptance is still `build.yml` firing on that PR. `nix-update` stays unusable here (crashes on `unsafeGetAttrPos "version"`, even with `--version=skip`) — see `docs/updating.md`.
 
 ## Gotchas
 
