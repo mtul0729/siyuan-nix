@@ -31,6 +31,8 @@
 let
   inherit (stdenv.hostPlatform) isDarwin isLinux system;
 
+  # 使用 nixpkgs 默认的 electron_43 疑似存在不兼容性问题，例如粘贴功能失效
+  # 改用electron_44，与 siyuan 上游的 electron major 版本一致
   electron = electron_44;
 
   # electron-builder-<platformId>.yml 的后缀，同时也是上游 extraResources 里打包内核用的目录名
