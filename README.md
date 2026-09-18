@@ -54,7 +54,7 @@ nix flake check --no-build --all-systems            # 三系统纯求值校验
 
 ## 自动升级
 
-`.github/workflows/update.yml` 每天 03:17 UTC 追踪 [siyuan-note/siyuan](https://github.com/siyuan-note/siyuan) 的最新**稳定** tag（跳过 `-alpha`/`-beta`），跑 `scripts/update.py` 轮换三个 FOD 哈希，然后开 PR 到 `main`。该 PR 上的 `build.yml` 会**自动**运行（三平台构建 + 内核测试），绿色后由人合并。
+`.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）追踪 [siyuan-note/siyuan](https://github.com/siyuan-note/siyuan) 的最新**稳定** tag（跳过 `-alpha`/`-beta`），跑 `scripts/update.py` 轮换三个 FOD 哈希，然后开 PR 到 `main`。该 PR 上的 `build.yml` 会**自动**运行（三平台构建 + 内核测试），绿色后由人合并。
 
 也可以手动触发（可指定目标 tag）：
 

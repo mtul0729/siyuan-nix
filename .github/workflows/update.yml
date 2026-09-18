@@ -12,8 +12,8 @@ name: Auto update SiYuan
 # 注意：schedule 触发要求本文件已存在于默认分支（main）。
 on:
   schedule:
-    # 每天 03:17 UTC 检查一次
-    - cron: '17 3 * * *'
+    # 每天北京时间 03:17（= 前一天 19:17 UTC）检查一次；cron 只认 UTC，故此处写 19:17
+    - cron: '17 19 * * *'
   workflow_dispatch:
     inputs:
       tag:

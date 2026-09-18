@@ -23,7 +23,7 @@
 
 ### 自动升级（GitHub Actions）
 
-`.github/workflows/update.yml` 把上面这套 SOP 自动化：每天 03:17 UTC 检查一次（也可 `workflow_dispatch`，可传入显式 `tag`）。流程：
+`.github/workflows/update.yml` 把上面这套 SOP 自动化：每天北京时间 03:17（= 前一天 19:17 UTC）检查一次（也可 `workflow_dispatch`，可传入显式 `tag`）。流程：
 
 1. `python3 scripts/update.py`：脚本内部检测上游最新 **稳定** tag（`git ls-remote` + `vX.Y.Z` 正则，滤掉 `-alpha`/`-beta` 与 `v202205311650-dev` 这类非版本 tag），与现行 tag 相同则直接退出。
 2. 提交到 `auto-update/siyuan-<tag>` 分支并开 PR（同一 tag 已有开启的 PR 时跳过，避免重复开单）。
