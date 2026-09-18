@@ -6,7 +6,8 @@ name: Auto update SiYuan
 # 身份：用 GitHub App 令牌而非 GITHUB_TOKEN。原因是 GitHub 规定 GITHUB_TOKEN 产生的事件
 # 不会触发其它 workflow —— 那样 PR 上的 build.yml 会停在 action_required 需人工批准。
 # App 令牌则：PR 作者是 <app>[bot]，其 pull_request 事件能正常触发 build.yml。
-# 需要 repo secrets：APP_ID、APP_PRIVATE_KEY（用仓库根的 .wizard-github-app.sh 引导创建）。
+# 需要 repo variable APP_CLIENT_ID（App 的 Client ID）+ repo secret APP_PRIVATE_KEY
+# （用仓库根的 .wizard-github-app.sh 引导创建；详见 README 的“自动升级”一节）。
 #
 # 注意：schedule 触发要求本文件已存在于默认分支（main）。
 on:
@@ -37,7 +38,7 @@ jobs:
       - id: app-token
         uses: actions/create-github-app-token@v3.2.0
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - uses: actions/checkout@v5
@@ -100,15 +101,16 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          APP_ID: ${{ secrets.APP_ID }}
         run: |
           set -euo pipefail
           tag='${{ steps.target.outputs.tag }}'
           branch='${{ steps.target.outputs.branch }}'
 
-          # commit 作者与 PR 作者一致：<app-slug>[bot]
+          # commit 作者与 PR 作者一致。邮箱前缀必须是 bot 的**用户 ID**（不是 App ID），
+          # 否则 GitHub 不会把 commit 归属到 <app-slug>[bot]（API 里表现为 login: none）。
+          bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
           git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${APP_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           git switch -c "$branch"
           git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
           git commit -m "siyuan: bump to $tag"

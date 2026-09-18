@@ -30,7 +30,7 @@
 
 真正的跨平台验收仍是 `build.yml` 在该 PR 上的运行（含 `aarch64-darwin`）；人工点合并。
 
-**身份与秘钥**：workflow 用 GitHub App 令牌而非 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不触发其它 workflow，那样 PR 上的 `build.yml` 会停在 `action_required` 需人工批准。因此需一个 GitHub App（repo secrets `APP_ID` + `APP_PRIVATE_KEY`；权限只给 `Contents: Read and write` 与 `Pull requests: Read and write`），这样 PR 作者是 `<app>[bot]`、其 `pull_request` 事件能自动触发 CI。App 的私钥一旦丢失/轮换，重新创建并更新这两个 secret 即可。
+**身份与秘钥**：workflow 用 GitHub App 令牌而非 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不触发其它 workflow，那样 PR 上的 `build.yml` 会停在 `action_required` 需人工批准。因此需一个 GitHub App（repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`；权限只给 `Contents: Read and write` 与 `Pull requests: Read and write`），这样 PR 作者是 `<app>[bot]`、其 `pull_request` 事件能自动触发 CI。一次性创建步骤见 README 的“自动升级”一节；私钥丢失/轮换时重建后更新这两个值即可。
 
 > 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
 > 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。
