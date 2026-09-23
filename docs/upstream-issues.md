@@ -1,6 +1,6 @@
 # 上游问题与上报记录
 
-> 状态：第 1~2 条已于 2026-08-31 **上报**（issue 号见各条）；第 3 条是**阻塞项**（nixpkgs 侧，挡住 pnpm 12，见该节结论）；其余保留证据与思路，待决定时直接取用。
+> 状态：第 1~2 条已于 2026-08-31 **上报**（issue 号见各条）；第 3 条是**阻塞项**（nixpkgs 侧，挡住 pnpm 12），**上游已有 PR 在修**（[#565315](https://github.com/NixOS/nixpkgs/pull/565315)，fetcherVersion 5，见该节「上游进展」）；其余保留证据与思路，待决定时直接取用。
 > 生成 issue 标题遵循主仓库 AGENTS.md 第 7 条：英文、不以 Fix 开头、客观描述症状。
 
 ## 1. Electron 弹窗把一切文件系统错误渲染成「第三方软件占用」
@@ -34,7 +34,7 @@
 
 ## 3. fetchPnpmDeps 对 store 内每个 `*.json` 跑 jq，pnpm 12 在 aarch64-darwin 上必红
 
-> 未上报（nixpkgs 侧）。**本仓库因此暂时继续使用 `pnpm_11`。**
+> 上游已有 PR 在修：[NixOS/nixpkgs#565315](https://github.com/NixOS/nixpkgs/pull/565315)（新增 `fetcherVersion = 5`）。**本仓库在该 PR 合并前继续使用 `pnpm_11`。**
 
 ### 结论
 
@@ -95,13 +95,30 @@ v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.j
 
 理论上可以给 `pnpmDeps` 加 `.overrideAttrs` 替换 `fixupPhase`，但那等于复刻 nixpkgs 的 fetcher 内部实现（store 版本目录、state db 转储、SQL dump 兼容处理都在那段里），一旦上游改 fetcherVersion 就静默失效——正是 AGENTS.md 里「FOD 哈希不变量」那类坑。不值得。**等上游修**。
 
+### 上游进展（2026-09-23 查证）
+
+**[NixOS/nixpkgs#565315「fetchPnpmDeps: add fetcherVersion 5」](https://github.com/NixOS/nixpkgs/pull/565315)**（2026-09-20 开，open，+225/−7，11 files，head `pnpm-v5`）正是修这个的，其摘要与本节的根因逐字对应：
+
+> When pnpm's global virtual store is enabled, `fetchPnpmDeps` currently archives materialized packages under `v11/links`. Package payloads there may contain JSONC, which fails the fetcher's JSON metadata normalization.
+
+做法：新增 `fetcherVersion = 5`，把虚拟 store 的实体化重定向到临时目录，只归档内容寻址 store 及其元数据，`pnpmConfigHook` 在离线安装时重建；**v4 继续受支持**。自带回归测试 `tests.pnpm.pnpm_12_v5`，用 `@pnpm/npm-conf@3.0.3`（`lib/tsconfig.make-out.json` 是 JSONC）复现；作者 Qusic 在评论里明确「it's not a reproducibility issue but build failure (similar issues found in #501300, #537020)」。pnpm maintainer Scrumplex 已参与，prepare/treefmt/commits 等检查绿。
+
+**前情**
+
+- [#501300](https://github.com/NixOS/nixpkgs/pull/501300)（2026-03-19，**已关闭未合并**）：最早提出把 `find` 从整个 store 收窄到 `*/index/*` 以避开 `links/`，Scrumplex 回「So perhaps we should just exclude `links/` instead?」——思路后来演变成 v5。评论里 MCSeekeri 报的坏文件是 `links/.../typedoc/tsconfig.json`，与本仓库同类。
+- [#537020（xmcl）](https://github.com/NixOS/nixpkgs/pull/537020)（2026-06）：另一个包撞同一个 `jq: parse error`，坏文件来自三方依赖而非项目源码。
+- [noosxe/worker-mcp#62](https://github.com/noosxe/worker-mcp/issues/62)（2026-09-23）：同症状、同 pnpm 12.3.4 + aarch64-darwin，但该 issue 主张**不挑平台**（坏文件是 typescript 7.0.2 的平台包，落在内容寻址 store 而非 `links/`）。与本仓库实测的「只在 darwin 红」机制不同，属同一 fixupPhase 缺陷的另一种触发路径。
+
 ### 复检清单（什么时候可以再切）
 
-1. nixpkgs 修好 `fetchPnpmDeps`（不再对包内 JSON 盲跑 jq，或排除 `node_modules`），或 pnpm 12.x 不再把包内文件实体化进 store 的 `links/`；
-2. 改 3 处：`pkgs/siyuan-ui.nix` 的 `pnpm_12` 入参、`fetchPnpmDeps.pnpm`、`nativeBuildInputs`，以及 `pkgs/siyuan-client.nix` 的入参与 `nativeBuildInputs`；`fetcherVersion` 保持 4（nixpkgs 只支持 3/4，3 已对 pnpm ≥ 11 禁用）；
-3. 把 `pnpmDeps.hash` 写成占位符跑 CI 回填；**已测得的 pnpm 12 哈希（两架构一致）**：`sha256-aZqEWUae1seSapIwjOa+mdj4yyMFrHc31XHx2tHKfVU=`（对应 v3.8.5 的 lockfile，换 tag 需重算）。
+1. **[#565315](https://github.com/NixOS/nixpkgs/pull/565315) 合并**（不再把 `v11/links` 归档进产物，因此不再对包内 JSON 盲跑 jq）；合并前不要切；
+2. 改 4 处：`pkgs/siyuan-ui.nix` 的 `pnpm_12` 入参、`fetchPnpmDeps.pnpm`、`fetchPnpmDeps.fetcherVersion`（4 → **5**）、`nativeBuildInputs`，以及 `pkgs/siyuan-client.nix` 的入参与 `nativeBuildInputs`；
+3. `fetcherVersion` 提到 5 后 pnpmDeps 哈希与 v4 不同，需重走占位哈希 → CI 回填。**v4 下已测得的 pnpm 12 哈希（linux 两架构一致，darwin 因本条问题拿不到）**：`sha256-aZqEWUae1seSapIwjOa+mdj4yyMFrHc31XHx2tHKfVU=`（对应 v3.8.5 的 lockfile，换 tag 需重算）；切到 v5 后此值作废；
+4. nixpkgs 的 `pkgs/by-name/si/siyuan` 同步受益：2026-09-23 的升级 PR [#566176](https://github.com/NixOS/nixpkgs/pull/566176) 就是因本条关闭的。
 
 ### 上报用
+
+> 已有 #565315 在修，**除非该 PR 被弃，否则不必再开 issue**；真要开就在它上面补本仓库的实测（16 个坏文件清单、`nixpkgs-bump-only` 对照 run）。
 
 - 候选标题：`fetchPnpmDeps fails on aarch64-darwin with pnpm 12: fixupPhase runs jq over JSONC files in the store`
 - 备用草案：`pnpm 12 store links contain tsconfig.json (JSONC), breaking fetchPnpmDeps' jq normalization on darwin`
