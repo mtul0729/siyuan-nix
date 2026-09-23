@@ -1,6 +1,6 @@
 # 上游问题与上报记录
 
-> 状态：第 1~2 条已于 2026-08-31 **上报**（issue 号见各条）；其余保留证据与思路，待决定时直接取用。
+> 状态：第 1~2 条已于 2026-08-31 **上报**（issue 号见各条）；第 3 条是**阻塞项**（nixpkgs 侧，挡住 pnpm 12，见该节结论）；其余保留证据与思路，待决定时直接取用。
 > 生成 issue 标题遵循主仓库 AGENTS.md 第 7 条：英文、不以 Fix 开头、客观描述症状。
 
 ## 1. Electron 弹窗把一切文件系统错误渲染成「第三方软件占用」
@@ -32,21 +32,80 @@
 - 本仓库：原先的 `modPostBuild`（把 `os.Chmod(dest, sourceinfo.Mode())` 替换为 `os.Chmod(dest, 0644)`，同 nixpkgs 做法）已在 v3.8.3 升级提交 `e27a512`（2026-09-07）中删除——不是「可以删」而是「必须删」：新 gulu 里那条替换目标已变成 `os.Chmod(dest, destMode)`，`--replace-fail` 会直接硬失败。
 - 残留风险（收窄）：删除后 v3.8.5 仍有从 store 往工作空间拷而用的是普通 `Copy` 的调用——`model/mount.go:504`（guide 笔记本）、`model/mount.go:516`（av storage）、`model/appearance_paths_migration.go:127`——拷出来的文件仍是 444。旧 hack 是全局 0644，所以这是一处收窄，而非等价替代。若日后这些路径也报 EACCES，按同一思路上报（改用 `CopyWritable`）即可。
 
-## 3. fetchPnpmDeps 对 store 内每个 `*.json` 跑 jq，pnpm 12 在 darwin 上必红
+## 3. fetchPnpmDeps 对 store 内每个 `*.json` 跑 jq，pnpm 12 在 aarch64-darwin 上必红
 
-> 未上报（nixpkgs 侧）。本仓库因此暂时继续使用 `pnpm_11`。
+> 未上报（nixpkgs 侧）。**本仓库因此暂时继续使用 `pnpm_11`。**
 
-- 位置：nixpkgs `pkgs/build-support/node/fetch-pnpm-deps/default.nix` 的 `fixupPhase`：
-  `for f in $(find $storePath -name "*.json"); do jq --sort-keys "del(.. | .checkedAt?)" $f | sponge $f; done`。
-- 行为：jq 无法解析 JSONC。pnpm 12 在 `aarch64-darwin` 上把包内文件（含 `tsconfig.json`、`.vscode/launch.json`，均带 `//` 注释）放进 store 路径后，该循环立刻失败，退出码 5，`siyuan-ui-pnpm-deps` 无法构建 → 客户端打包连带失败。
-- 证据（2026-09-23，`pnpm_12 = 12.3.4`，分支 `pnpm-12`，run 35862337069）：BADJSON 探针打印出的坏文件形如
-  `$storePath/v11/links/@/define-data-property/1.1.4/<hash>/node_modules/define-data-property/tsconfig.json`、
-  `.../hasown/2.0.4/<hash>/node_modules/hasown/tsconfig.json`、
-  `.../xmlbuilder/15.1.1/<hash>/node_modules/xmlbuilder/.vscode/launch.json`（十余个）。
-  同一提交的 linux 两个架构没有这些文件，`jq` 未报错，FOD 正常产出（哈希架构无关：`sha256-aZqEWUae1seSapIwjOa+mdj4yyMFrHc31XHx2tHKfVU=`）。
-- 变量隔离：仅 bump nixpkgs、仍用 `pnpm_11` 的分支（run 35861418983）三个平台全绿，故与 nixpkgs 升级无关，锅在 pnpm 12（它是 Rust 重写版，store/links 布局与 11 不同）。
-- 本仓库处置：上游 `app/package.json` 自 v3.8.5 起 `packageManager: pnpm@12.3.4`，但 darwin 客户端构建过不去，故留在 `pnpm_11`（`fetcherVersion = 4` 对 11/12 都适用，换版本只需改 3 处引用并重算 `pnpmDeps` 哈希）。待 nixpkgs 修好后再切。
+### 结论
+
+上游 `app/package.json` 自 **v3.8.4** 起 `packageManager` 就是 `pnpm@12.3.4`（v3.8.3 还是 `pnpm@11.25.0`，官方 Dockerfile 用 corepack 强制该版本），nixpkgs 的 `pnpm_12` 恰好也是 12.3.4——**方向是对的，但切不过去**：nixpkgs 的 `fetchPnpmDeps` 在 darwin 上会被包内 JSONC 文件（带 `//` 注释的 `tsconfig.json` 等）打崩，而 `siyuan-ui` 的 `pnpmDeps` 是 linux 与 darwin 共用的一个 FOD，darwin 红就等于 darwin 客户端发不出去。
+
+### 症状
+
+- 推导：`siyuan-ui-pnpm-deps`（`pkgs/siyuan-ui.nix` 的 `fetchPnpmDeps`，`fetcherVersion = 4`）。
+- 表现：pnpm 安装本身是成功的（日志末行 `Done in 5.3s using pnpm v12.3.4`），随后 `fixupPhase` 第一行就报 `jq: parse error: Invalid numeric literal at line 3, column 7`，builder 退出码 5，`siyuan-client` 连带失败。
+- 平台差异：linux（x86_64 / aarch64）完全正常，能算出 FOD 哈希；只有 `aarch64-darwin` 红。
+
+### 根因
+
+nixpkgs `pkgs/build-support/node/fetch-pnpm-deps/default.nix` 的 `fixupPhase`：
+
+```bash
+rm -rf $storePath/{v3,v10,v11}/tmp
+for f in $(find $storePath -name "*.json"); do
+  jq --sort-keys "del(.. | .checkedAt?)" $f | sponge $f
+done
+```
+
+它对 store 里**每一个** `*.json` 都跑 jq，而 jq 不能解析 JSONC。pnpm 12 在 darwin 上把包内文件实体化到 `$storePath/v11/links/@/<pkg>/<ver>/<hash>/node_modules/<pkg>/` 下（Rust 重写版的 links 布局与 11 不同；linux 上这些路径不存在，故探针在 linux 一条 BADJSON 都没打出来）。命中即失败——nix stdenv 的 `pipefail` 让 jq 的非零状态穿透出 `| sponge` 管道。
+
+### 对照实验（2026-09-23，三次 CI run）
+
+| 分支 / 提交 | 内容 | x86_64-linux | aarch64-linux | aarch64-darwin | run |
+| --- | --- | --- | --- | --- | --- |
+| `nixpkgs-bump-only`（0738944） | 只 bump nixpkgs（b1b87598 → 6774f7bc），仍 `pnpm_11` | ✓ | ✓ | ✓ | [35861418983](https://github.com/mtul0729/siyuan-nix/actions/runs/35861418983) |
+| `pnpm-12`（58ed539c） | 上面 + `pnpm_11` → `pnpm_12`（占位哈希） | 哈希失配（正常） | 哈希失配（正常） | ✗ jq parse error | [35860892800](https://github.com/mtul0729/siyuan-nix/actions/runs/35860892800) |
+| `pnpm-12`（e12492d0） | 同上 + BADJSON 探针 | 哈希失配 | 哈希失配 | ✗ + 打印坏文件 | [35862337069](https://github.com/mtul0729/siyuan-nix/actions/runs/35862337069) |
+
+第二次 run 排除了「nixpkgs bump 的锅」：只 bump lock、仍用 `pnpm_11` 时三平台全绿。
+
+**坏文件清单**（探针 `find "$storePath" -name "*.json"` + `jq -e .`，16 个文件 / 15 个包）：
+
+```
+v11/links/@/define-data-property/1.1.4/<hash>/node_modules/define-data-property/tsconfig.json
+v11/links/@/es-errors/1.3.0/<hash>/node_modules/es-errors/tsconfig.json
+v11/links/@/math-intrinsics/1.1.0/<hash>/node_modules/math-intrinsics/tsconfig.json
+v11/links/@/has-tostringtag/1.0.2/<hash>/node_modules/has-tostringtag/tsconfig.json
+v11/links/@/call-bind-apply-helpers/1.0.2/<hash>/node_modules/call-bind-apply-helpers/tsconfig.json
+v11/links/@/xmlbuilder/15.1.1/<hash>/node_modules/xmlbuilder/.vscode/launch.json
+v11/links/@/es-define-property/1.0.1/<hash>/node_modules/es-define-property/tsconfig.json
+v11/links/@/dunder-proto/1.0.1/<hash>/node_modules/dunder-proto/tsconfig.json
+v11/links/@/hasown/2.0.4 与 2.0.3/<hash>/node_modules/hasown/tsconfig.json（各 1）
+v11/links/@/has-symbols/1.1.0/<hash>/node_modules/has-symbols/tsconfig.json
+v11/links/@/get-proto/1.0.1/<hash>/node_modules/get-proto/tsconfig.json
+v11/links/@/gopd/1.2.0/<hash>/node_modules/gopd/tsconfig.json
+v11/links/@/es-set-tostringtag/2.1.0/<hash>/node_modules/es-set-tostringtag/tsconfig.json
+v11/links/@/domhandler/3.0.0/<hash>/node_modules/domhandler/tsconfig.json
+v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.json
+```
+
+这些 `tsconfig.json` / `.vscode/launch.json` 是包作者写的 JSONC（带 `//` 注释），本身完全合法，问题只在于 fetcher 拿 jq 去扫所有 `*.json`。
+
+### 为什么不在本仓库绕过
+
+理论上可以给 `pnpmDeps` 加 `.overrideAttrs` 替换 `fixupPhase`，但那等于复刻 nixpkgs 的 fetcher 内部实现（store 版本目录、state db 转储、SQL dump 兼容处理都在那段里），一旦上游改 fetcherVersion 就静默失效——正是 AGENTS.md 里「FOD 哈希不变量」那类坑。不值得。**等上游修**。
+
+### 复检清单（什么时候可以再切）
+
+1. nixpkgs 修好 `fetchPnpmDeps`（不再对包内 JSON 盲跑 jq，或排除 `node_modules`），或 pnpm 12.x 不再把包内文件实体化进 store 的 `links/`；
+2. 改 3 处：`pkgs/siyuan-ui.nix` 的 `pnpm_12` 入参、`fetchPnpmDeps.pnpm`、`nativeBuildInputs`，以及 `pkgs/siyuan-client.nix` 的入参与 `nativeBuildInputs`；`fetcherVersion` 保持 4（nixpkgs 只支持 3/4，3 已对 pnpm ≥ 11 禁用）；
+3. 把 `pnpmDeps.hash` 写成占位符跑 CI 回填；**已测得的 pnpm 12 哈希（两架构一致）**：`sha256-aZqEWUae1seSapIwjOa+mdj4yyMFrHc31XHx2tHKfVU=`（对应 v3.8.5 的 lockfile，换 tag 需重算）。
+
+### 上报用
+
 - 候选标题：`fetchPnpmDeps fails on aarch64-darwin with pnpm 12: fixupPhase runs jq over JSONC files in the store`
+- 备用草案：`pnpm 12 store links contain tsconfig.json (JSONC), breaking fetchPnpmDeps' jq normalization on darwin`
+- 附：nixpkgs 复现最小条件（任一用了 `fetchPnpmDeps` + `pnpm_12` 且依赖树里含 `hasown` / `define-data-property` 之类带 JSONC 的包，在 aarch64-darwin 上构建）。
 
 ## 4. 第三方声明里的 Pandoc 版本长期未随内置二进制更新
 
