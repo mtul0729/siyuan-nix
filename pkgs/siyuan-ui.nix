@@ -14,7 +14,7 @@
 }:
 
 let
-  pnpmDeps = fetchPnpmDeps {
+  pnpmDepsBase = fetchPnpmDeps {
     pname = "siyuan-ui";
     inherit version;
     pnpm = pnpm_12;
@@ -25,6 +25,17 @@ let
     fetcherVersion = 4;
     hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
   };
+
+  # TEMP DEBUG: 定位 darwin 上让 fetcher 的 jq 崩掉的 JSON 文件
+  pnpmDeps = pnpmDepsBase.overrideAttrs (old: {
+    postInstall =
+      (old.postInstall or "")
+      + ''
+        find "$storePath" -name "*.json" -print0 | while IFS= read -r -d "" f; do
+          jq -e . "$f" > /dev/null 2>&1 || echo "BADJSON: $f"
+        done | head -20
+      '';
+  });
 in
 stdenv.mkDerivation {
   pname = "siyuan-ui";
