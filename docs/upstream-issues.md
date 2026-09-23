@@ -32,7 +32,23 @@
 - 本仓库：原先的 `modPostBuild`（把 `os.Chmod(dest, sourceinfo.Mode())` 替换为 `os.Chmod(dest, 0644)`，同 nixpkgs 做法）已在 v3.8.3 升级提交 `e27a512`（2026-09-07）中删除——不是「可以删」而是「必须删」：新 gulu 里那条替换目标已变成 `os.Chmod(dest, destMode)`，`--replace-fail` 会直接硬失败。
 - 残留风险（收窄）：删除后 v3.8.5 仍有从 store 往工作空间拷而用的是普通 `Copy` 的调用——`model/mount.go:504`（guide 笔记本）、`model/mount.go:516`（av storage）、`model/appearance_paths_migration.go:127`——拷出来的文件仍是 444。旧 hack 是全局 0644，所以这是一处收窄，而非等价替代。若日后这些路径也报 EACCES，按同一思路上报（改用 `CopyWritable`）即可。
 
-## 3. 第三方声明里的 Pandoc 版本长期未随内置二进制更新
+## 3. fetchPnpmDeps 对 store 内每个 `*.json` 跑 jq，pnpm 12 在 darwin 上必红
+
+> 未上报（nixpkgs 侧）。本仓库因此暂时继续使用 `pnpm_11`。
+
+- 位置：nixpkgs `pkgs/build-support/node/fetch-pnpm-deps/default.nix` 的 `fixupPhase`：
+  `for f in $(find $storePath -name "*.json"); do jq --sort-keys "del(.. | .checkedAt?)" $f | sponge $f; done`。
+- 行为：jq 无法解析 JSONC。pnpm 12 在 `aarch64-darwin` 上把包内文件（含 `tsconfig.json`、`.vscode/launch.json`，均带 `//` 注释）放进 store 路径后，该循环立刻失败，退出码 5，`siyuan-ui-pnpm-deps` 无法构建 → 客户端打包连带失败。
+- 证据（2026-09-23，`pnpm_12 = 12.3.4`，分支 `pnpm-12`，run 35862337069）：BADJSON 探针打印出的坏文件形如
+  `$storePath/v11/links/@/define-data-property/1.1.4/<hash>/node_modules/define-data-property/tsconfig.json`、
+  `.../hasown/2.0.4/<hash>/node_modules/hasown/tsconfig.json`、
+  `.../xmlbuilder/15.1.1/<hash>/node_modules/xmlbuilder/.vscode/launch.json`（十余个）。
+  同一提交的 linux 两个架构没有这些文件，`jq` 未报错，FOD 正常产出（哈希架构无关：`sha256-aZqEWUae1seSapIwjOa+mdj4yyMFrHc31XHx2tHKfVU=`）。
+- 变量隔离：仅 bump nixpkgs、仍用 `pnpm_11` 的分支（run 35861418983）三个平台全绿，故与 nixpkgs 升级无关，锅在 pnpm 12（它是 Rust 重写版，store/links 布局与 11 不同）。
+- 本仓库处置：上游 `app/package.json` 自 v3.8.5 起 `packageManager: pnpm@12.3.4`，但 darwin 客户端构建过不去，故留在 `pnpm_11`（`fetcherVersion = 4` 对 11/12 都适用，换版本只需改 3 处引用并重算 `pnpmDeps` 哈希）。待 nixpkgs 修好后再切。
+- 候选标题：`fetchPnpmDeps fails on aarch64-darwin with pnpm 12: fixupPhase runs jq over JSONC files in the store`
+
+## 4. 第三方声明里的 Pandoc 版本长期未随内置二进制更新
 
 - 位置：`scripts/generate-third-party-notices.py:346-352`（表项硬编码 `("Pandoc", "3.5", ...)`），产物落在 `THIRD_PARTY_NOTICES.md:68`。
 - 行为：`app/pandoc/*.zip` 里实际内置的是 **pandoc 3.10.1**，但声明表一直写 `3.5`。
