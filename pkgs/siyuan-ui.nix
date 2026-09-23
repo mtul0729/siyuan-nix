@@ -6,7 +6,7 @@
   lib,
   stdenv,
   nodejs_22,
-  pnpm_11,
+  pnpm_12,
   pnpmConfigHook,
   fetchPnpmDeps,
   version,
@@ -17,11 +17,13 @@ let
   pnpmDeps = fetchPnpmDeps {
     pname = "siyuan-ui";
     inherit version;
-    pnpm = pnpm_11;
+    pnpm = pnpm_12;
     src = src + "/app";
-    # pnpm 11 的依赖存储格式对应 fetcherVersion = 4（含 SQLite 状态库的可复现转储）
+    # 依赖存储格式对应 fetcherVersion = 4（含 SQLite 状态库的可复现转储）；
+    # nixpkgs 目前只支持 3/4，且 3 已对 pnpm >= 11 禁用，故 pnpm 12 仍用 4。
+    # 版本跟随上游 app/package.json 的 packageManager（v3.8.5 起为 pnpm@12.3.4）。
     fetcherVersion = 4;
-    hash = "sha256-oj86MLPIAIABmd6K4au0XQTSNGuSjjoRmPj8SKcJ838=";
+    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
   };
 in
 stdenv.mkDerivation {
@@ -31,10 +33,10 @@ stdenv.mkDerivation {
   src = src + "/app";
 
   inherit pnpmDeps;
-  # pnpmConfigHook 从 PATH 中查找 pnpm，需与 fetchPnpmDeps 使用的版本一致（pnpm_11）
+  # pnpmConfigHook 从 PATH 中查找 pnpm，需与 fetchPnpmDeps 使用的版本一致（pnpm_12）
   nativeBuildInputs = [
     nodejs_22
-    pnpm_11
+    pnpm_12
     pnpmConfigHook
   ];
 

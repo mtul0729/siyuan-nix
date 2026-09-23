@@ -9,7 +9,7 @@
   lib,
   stdenv,
   nodejs_22,
-  pnpm_11,
+  pnpm_12,
   pnpmConfigHook,
   pnpmBuildHook,
   zip,
@@ -76,7 +76,7 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = [
     nodejs_22
-    pnpm_11
+    pnpm_12
     pnpmConfigHook
     # 前端 bundle 由 webpack 生成到 app/stage/build —— 该目录被 .gitignore 排除、未随仓库提交，
     # 所以两个平台都必须真跑一次构建，否则产物缺少 JS bundle。
