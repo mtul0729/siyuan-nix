@@ -49,7 +49,13 @@ stdenv.mkDerivation {
 
   installPhase = ''
     mkdir -p $out/lib/siyuan
-    mv stage appearance guide changelogs $out/lib/siyuan/
+    mv stage appearance guide $out/lib/siyuan/
+    # 预发布版（tag 带 -alpha/-beta）下 trimChangelogs.js 会删掉整个 changelogs 目录——
+    # 上游对预发布就是不给 changelog（内核按 changelogs/v{version} 读取，缺了它自己会处理）。
+    # 稳定版才有，故必须容忍它不存在，否则 -alpha/-beta 的服务端包直接编不出来。
+    if [ -d changelogs ]; then
+      mv changelogs $out/lib/siyuan/
+    fi
   '';
 
   passthru = { inherit pnpmDeps; };
