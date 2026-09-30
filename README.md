@@ -73,19 +73,21 @@ nix build github:mtul0729/siyuan-nix/alpha-release#siyuan-client
 
 ## 自动升级
 
-`.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）跑一次：先解析**一个**目标——正式/beta/alpha 中版本最高的那个 release（`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`），然后
+`.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）跑一次，**一条流水线解析两个互相独立的目标**：
 
-- 总是把 `alpha-release` 滚到它（force-push 直接落盘，不开 PR：上游 alpha 一天能发好几个，逐个开 PR 会淹没 main 的升级单）；
-- **只有当它是稳定版**时，才同时给 `main` 开 PR（三平台构建 + 内核测试，绿色后人工合并）。
+- `main` → 最新**稳定版**（只认 `vX.Y.Z`），跑 `scripts/update.py` 轮换三个 FOD 哈希后开 PR；该 PR 上的 `build.yml` 会自动运行（三平台构建 + 内核测试），绿色后由人合并。
+- `alpha-release` → 正式/beta/alpha 中版本最高者（`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`），force-push 直接落盘，不开 PR（上游 alpha 一天能发好几个，逐个开 PR 会淹没 main 的升级单）。该分支上的 `build.yml` 同样跑全矩阵并推 cachix；它不会合回 `main`。
 
-两个分支共用这一轮算出的哈希：稳定版时在 main 的 checkout 上轮换一次，`alpha-release` 把这三个文件取过去（方向只能是 main → alpha，见 AGENTS.md）；预发布时 main 不动，轮换就在 `alpha-release` 上做。稳定版且 `main` 已在该 tag 时，`alpha-release` 直接置为 main 的 commit，连轮换都省掉。
+**为什么不能只解析一个「最高版本」**：上游习惯正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻有 `v3.8.7-alpha.1`），于是 `v3.8.7` 正式发布时窗口里很可能已有 `v3.8.8-alpha.1`——最高版本是那个 alpha，main 就永远拿不到 `v3.8.7` 的 PR，停在旧稳定版上。stable 的解析必须独立于预发布。
 
-手动触发（一个 tag 同时决定两个分支）：
+去重只在两者重合时（最新 release 恰好是稳定版）：那一轮哈希轮换只做一次，`alpha-release` 要么取 main 刚算出的 pin，要么（main 已在该 tag）直接置为 main 的 commit。最新是预发布时两者本就不同，alpha 单独轮换一次，那是必需的而非重复。
+
+手动触发（两个目标可分别指定）：
 
 ```bash
-gh workflow run update.yml                             # 自动解析最高版本 release
-gh workflow run update.yml -f tag=v3.9.0               # 稳定版：alpha + main PR
-gh workflow run update.yml -f tag=v3.8.7-alpha.1       # 预发布：只滚 alpha-release
+gh workflow run update.yml                             # 自动解析
+gh workflow run update.yml -f tag=v3.9.0               # main 指定稳定版
+gh workflow run update.yml -f alpha_tag=v3.8.7-alpha.1 # alpha-release 指定预发布
 gh workflow run update.yml -f force=true               # tag 未变也重算哈希
 ```
 
