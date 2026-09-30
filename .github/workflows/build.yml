@@ -2,7 +2,8 @@ name: Build and Push to Cachix
 
 on:
   push:
-    branches: [main]
+    # alpha-release 是滚动跟踪上游预发布的自动分支，同样要给出红绿并推 cachix
+    branches: [main, alpha-release]
   pull_request:
   workflow_dispatch:
 

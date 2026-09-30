@@ -49,18 +49,41 @@ nix build -L .#siyuan-client                        # 桌面客户端（linux / 
 nix build -L .#checks.x86_64-linux.siyuan-kernel-test    # 内核 go 测试（独立于主构建）
 nix flake check --no-build --all-systems            # 三系统纯求值校验
 ./scripts/update.py [vX.Y.Z]                         # 升级 tag + 轮换三个 FOD 哈希（详见脚本头注释）
+./scripts/update.py --channel=any                    # 同上，但追正式/beta/alpha 中版本最高者
 ./scripts/update.py --print-pins                     # 打印当前 pin 的 tag/哈希（JSON）
+```
+
+## 分支
+
+| 分支 | 跟踪 | 说明 |
+| --- | --- | --- |
+| `main` | 最新**正式版** | 稳定，由自动 PR 升级（人工合并） |
+| `alpha-release` | 正式 / beta / alpha 中版本最高者 | 预发布滚动分支，自动 force-push，供提前试用 |
+| `dev` | — | 开发分支 |
+
+想用预发布就把 flake 输入的 ref 指过去：
+
+```nix
+inputs.siyuan-nix.url = "github:mtul0729/siyuan-nix/alpha-release";
+```
+
+```bash
+nix build github:mtul0729/siyuan-nix/alpha-release#siyuan-client
 ```
 
 ## 自动升级
 
 `.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）追踪 [siyuan-note/siyuan](https://github.com/siyuan-note/siyuan) 的最新**稳定** tag（跳过 `-alpha`/`-beta`），跑 `scripts/update.py` 轮换三个 FOD 哈希，然后开 PR 到 `main`。该 PR 上的 `build.yml` 会**自动**运行（三平台构建 + 内核测试），绿色后由人合并。
 
-也可以手动触发（可指定目标 tag）：
+另有 `.github/workflows/update-alpha.yml` 每天北京时间 05:47 滚动更新 `alpha-release` 分支：跑 `scripts/update.py --channel=any`，追正式/beta/alpha 中版本最高的那个 release（`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`），并直接 force-push（上游 alpha 一天能发好几个，逐个开 PR 只会淹没 main 的升级单）。该分支上的 `build.yml` 同样跑全矩阵并推 cachix；它不会合回 `main`。
+
+手动触发：
 
 ```bash
-gh workflow run update.yml              # 追最新稳定版
+gh workflow run update.yml                          # main：追最新稳定版
 gh workflow run update.yml -f tag=v3.9.0
+gh workflow run update-alpha.yml                    # alpha-release：追正式/beta/alpha 最新者
+gh workflow run update-alpha.yml -f tag=v3.8.7-alpha.1
 ```
 
 ### 一次性设置：GitHub App

@@ -3,6 +3,7 @@
 
 用法:
     scripts/update.py                # 升到上游最新稳定版（忽略 -alpha/-beta 等预发布）
+    scripts/update.py --channel=any  # 升到正式/beta/alpha 中版本最高者（alpha-release 分支用）
     scripts/update.py v3.9.0         # 升到指定 tag
     scripts/update.py --force        # tag 未变也重算哈希（改了影响 FOD 内容的东西后要用）
     scripts/update.py --build        # 升级后再冒烟构建 siyuan-server
@@ -34,6 +35,12 @@ UPSTREAM_TARBALL = "https://github.com/siyuan-note/siyuan/archive/{tag}.tar.gz"
 
 # 只认 vX.Y.Z：上游会先发 -alpha/-beta，且存在 v202205311650-dev 这类非版本 tag。
 STABLE_TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
+# --channel=any：正式版之外的预发布目前只有 -alpha.N / -beta.N 两种（后缀可选）。
+FULL_TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)\.(\d+))?")
+
+# 同一版本号内 alpha < beta < 正式，保证 v3.8.7-alpha.1 > v3.8.6 且 v3.8.6-beta.2 < v3.8.6。
+STAGE_RANK = {"alpha": 0, "beta": 1}
+STABLE_RANK = 2
 
 SRI = r"sha256-[A-Za-z0-9+/=]+"
 HASH_MISMATCH_RE = re.compile(r"got:\s+(?P<hash>" + SRI + r")")
@@ -109,24 +116,33 @@ def write_pin(repo: Path, pin: Pin, value: str) -> None:
     (repo / pin.relpath).write_text(text[:start] + value + text[end:], encoding="utf-8")
 
 
-def version_key(tag: str) -> tuple[int, int, int]:
-    match = STABLE_TAG_RE.fullmatch(tag)
+def version_key(tag: str) -> tuple[int, int, int, int, int]:
+    """排序键：主版本.次版本.补丁 + 预发布等级（alpha < beta < 正式）+ 预发布序号。"""
+    match = FULL_TAG_RE.fullmatch(tag)
     if match is None:
         raise UpdateError(f"非法 tag: {tag!r}")
-    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+    major, minor, patch, stage, num = match.groups()
+    rank = STABLE_RANK if stage is None else STAGE_RANK[stage]
+    return int(major), int(minor), int(patch), rank, int(num or 0)
 
 
-def latest_stable_tag(repo: Path) -> str:
+def latest_tag(repo: Path, channel: str) -> str:
+    """channel=stable 只认 vX.Y.Z；channel=any 把 -alpha.N/-beta.N 也纳入比较。"""
     proc = run(["git", "ls-remote", "--tags", "--refs", UPSTREAM_REPO], cwd=repo)
     if proc.returncode != 0:
         raise UpdateError(f"git ls-remote 失败:\n{proc.stderr.strip()}")
+    pattern = STABLE_TAG_RE if channel == "stable" else FULL_TAG_RE
     tags = [
         ref
         for line in proc.stdout.splitlines()
-        if (ref := line.partition("refs/tags/")[2]) and STABLE_TAG_RE.fullmatch(ref)
+        if (ref := line.partition("refs/tags/")[2]) and pattern.fullmatch(ref)
     ]
     if not tags:
-        raise UpdateError("上游未找到任何 vX.Y.Z 稳定 tag")
+        raise UpdateError(
+            "上游未找到任何 vX.Y.Z 稳定 tag"
+            if channel == "stable"
+            else "上游未找到任何 vX.Y.Z[-(alpha|beta).N] tag"
+        )
     return max(tags, key=version_key)
 
 
@@ -169,10 +185,10 @@ def current_pins(repo: Path) -> dict[str, str]:
     }
 
 
-def update(repo: Path, tag: str | None, *, force: bool, build: bool) -> int:
+def update(repo: Path, tag: str | None, *, channel: str, force: bool, build: bool) -> int:
     current = read_pin(repo, TAG)
-    tag = tag or latest_stable_tag(repo)
-    version_key(tag)  # 校验格式；本脚本只跟稳定版
+    tag = tag or latest_tag(repo, channel)
+    version_key(tag)  # 校验格式
     if tag == current and not force:
         print(f"已是最新: {tag}")
         return 0
@@ -212,6 +228,12 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("tag", nargs="?", help="目标 tag（默认取上游最新稳定版）")
+    parser.add_argument(
+        "--channel",
+        choices=("stable", "any"),
+        default="stable",
+        help="选哪个 tag：stable=只认正式版（默认），any=正式/beta/alpha 中版本最高者",
+    )
     parser.add_argument("--force", action="store_true", help="tag 未变也重算哈希")
     parser.add_argument("--build", action="store_true", help="升级后冒烟构建 siyuan-server")
     parser.add_argument(
@@ -232,7 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.print_pins:
             print(json.dumps(current_pins(repo), ensure_ascii=False))
             return 0
-        return update(repo, args.tag, force=args.force, build=args.build)
+        return update(repo, args.tag, channel=args.channel, force=args.force, build=args.build)
     except UpdateError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

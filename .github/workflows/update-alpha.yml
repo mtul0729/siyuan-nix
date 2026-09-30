@@ -1,0 +1,115 @@
+name: Auto update SiYuan (alpha-release)
+
+# 与 update.yml 的分工：main 追最新**稳定**版并开 PR；本 workflow 滚动更新 alpha-release
+# 分支，追「正式 / beta / alpha 三者中版本最高的那个 release」（semver 序：
+# v3.8.7-alpha.1 > v3.8.6 > v3.8.6-beta.2）。该分支供想提前试用上游预发布的人使用。
+#
+# 为什么直接 push 而不是开 PR：上游 alpha 一天能发好几个（v3.8.6-alpha.1..10），
+# 逐个开 PR 只会淹没真正需要人看的 main 升级单；红绿由 alpha-release 上的 build.yml 给出。
+#
+# 身份同样必须是 GitHub App 令牌：GitHub 规定 GITHUB_TOKEN 产生的事件不触发其它 workflow，
+# 用默认令牌 push 的话 alpha-release 上的 build.yml 根本不会跑（与 update.yml 同一约束）。
+#
+# 注意：schedule 触发要求本文件已存在于默认分支（main）。
+on:
+  schedule:
+    # 每天北京时间 05:47（= 前一天 21:47 UTC）检查一次；与 update.yml 的 19:17 错开
+    - cron: '47 21 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '目标 tag（如 v3.8.7-alpha.1）；留空则自动取正式/beta/alpha 中最新者'
+        required: false
+        default: ''
+      force:
+        description: 'tag 未变也重算哈希（--force）'
+        required: false
+        default: false
+        type: boolean
+
+# 与 update.yml 用不同 group：两条流水线各改各的分支，互不阻塞
+concurrency:
+  group: auto-update-siyuan-alpha
+  cancel-in-progress: false
+
+# GITHUB_TOKEN 只需只读：写操作（force push）走下面的 GitHub App 令牌。
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      # 必须 checkout alpha-release 本身：该分支的 tag/三个哈希与 main 不同，
+      # 从 main 起算会把 main 的 pin 当成基准（可能把分支回退到旧正式版）。
+      - uses: actions/checkout@v5
+        with:
+          ref: alpha-release
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - uses: cachix/cachix-action@v17
+        with:
+          name: mtul
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Bump tag and rotate FOD hashes
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -euo pipefail
+          args=(--channel=any)
+          if [[ "$INPUT_FORCE" == "true" ]]; then
+            args+=(--force)
+          fi
+          if [[ -n "$INPUT_TAG" ]]; then
+            python3 scripts/update.py "${args[@]}" "$INPUT_TAG"
+          else
+            python3 scripts/update.py "${args[@]}"
+          fi
+
+      - name: Detect changes
+        id: diff
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "alpha-release 已指向正式/beta/alpha 中最新的 release。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Force-push alpha-release
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          tag="$(python3 scripts/update.py --print-pins | jq -r .tag)"
+
+          # commit 作者归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID）
+          bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
+          git commit -m "siyuan: bump to $tag"
+          # 该分支归自动化所有，force 覆盖以保持幂等（checkout 是 detached HEAD，故显式写全 refspec）
+          git push --force origin "HEAD:refs/heads/alpha-release"
+
+          {
+            printf '滚动更新 `alpha-release` 到 `%s`（正式/beta/alpha 中版本最高者）。\n\n' "$tag"
+            printf '由 `.github/workflows/update-alpha.yml` 调用 `scripts/update.py --channel=any` 生成。\n\n'
+            printf '本分支不会自动合并到 `main`——`main` 只追稳定版（见 `update.yml`）。\n'
+            printf '验收以本分支上的 `build.yml` 为准：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿。\n'
+          } >> "$GITHUB_STEP_SUMMARY"

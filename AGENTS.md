@@ -13,10 +13,11 @@ nix build -L .#checks.<system>.siyuan-kernel-test   # kernel go test (via passth
 nix build -L .#siyuan-server.passthru.kernel   # kernel derivation (no tests)
 nix flake check --no-build --all-systems   # eval-only validation of all three systems
 ./scripts/update.py [vX.Y.Z]       # bump tag + rotate the three FOD hashes (needs network + nix)
+./scripts/update.py --channel=any  # same, but pick the highest of stable/beta/alpha (alpha-release)
 ./scripts/update.py --print-pins     # print the currently pinned tag/hashes as JSON
 ```
 
-There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the client and its inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`. The auto-update workflow additionally needs a GitHub App (repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`; permissions `Contents: Read and write` + `Pull requests: Read and write`, nothing else) — its token is what makes the upgrade PR's `pull_request` events run `build.yml` automatically; with the built-in `GITHUB_TOKEN` such a PR sits at `action_required` waiting for manual approval. See the "自动升级" section of README.md for the one-time setup.
+There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the client and its inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` or `alpha-release` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`. The auto-update workflow additionally needs a GitHub App (repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`; permissions `Contents: Read and write` + `Pull requests: Read and write`, nothing else) — its token is what makes the upgrade PR's `pull_request` events run `build.yml` automatically; with the built-in `GITHUB_TOKEN` such a PR sits at `action_required` waiting for manual approval. See the "自动升级" section of README.md for the one-time setup.
 
 ## Update / hash workflow
 
@@ -27,6 +28,8 @@ Run `./scripts/update.py [vX.Y.Z]` (Python 3, stdlib only): it rewrites `tag`, t
 - Full rationale and step-by-step: `docs/updating.md`.
 
 Automated path: `.github/workflows/update.yml` runs daily on the default branch (and via `workflow_dispatch`, optionally with an explicit `tag`). It runs `scripts/update.py` (which detects the newest upstream *stable* tag via `git ls-remote`, ignoring `-alpha`/`-beta` and non-version tags), skips if nothing changed, and otherwise commits to an `auto-update/siyuan-<tag>` branch and opens a PR against `main` as a GitHub App (`<app>[bot]`), so `build.yml` fires on that PR on its own. The real cross-platform acceptance is still `build.yml` running on that PR; a human merges. `nix-update` stays unusable here (crashes on `unsafeGetAttrPos "version"`, even with `--version=skip`) — see `docs/updating.md`.
+
+Second automated path: `.github/workflows/update-alpha.yml` rolls the `alpha-release` branch — it runs `scripts/update.py --channel=any`, i.e. it targets the highest tag among stable/`-beta.N`/`-alpha.N` (`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`), and force-pushes that branch directly instead of opening a PR (upstream ships many alphas a day; per-alpha PRs would drown the real upgrade PRs). It must check out `alpha-release` itself, not `main`, or the pins from `main` become the baseline. `alpha-release` is never merged into `main`; `build.yml` treats a push to it like a push to `main` (full matrix + cachix).
 
 ## Gotchas
 
