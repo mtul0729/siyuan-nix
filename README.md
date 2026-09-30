@@ -73,20 +73,20 @@ nix build github:mtul0729/siyuan-nix/alpha-release#siyuan-client
 
 ## 自动升级
 
-`.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）跑一次，**一条流水线喂两个分支**：
+`.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）跑一次：先解析**一个**目标——正式/beta/alpha 中版本最高的那个 release（`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`），然后
 
-- `main`：追踪最新**稳定** tag（跳过 `-alpha`/`-beta`），跑 `scripts/update.py` 轮换三个 FOD 哈希后开 PR；该 PR 上的 `build.yml` 会自动运行（三平台构建 + 内核测试），绿色后由人合并。
-- `alpha-release`：滚动到正式/beta/alpha 中版本最高的那个 release（`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`），force-push 直接落盘，不开 PR（上游 alpha 一天能发好几个，逐个开 PR 会淹没 main 的升级单）。该分支上的 `build.yml` 同样跑全矩阵并推 cachix；它不会合回 `main`。
+- 总是把 `alpha-release` 滚到它（force-push 直接落盘，不开 PR：上游 alpha 一天能发好几个，逐个开 PR 会淹没 main 的升级单）；
+- **只有当它是稳定版**时，才同时给 `main` 开 PR（三平台构建 + 内核测试，绿色后人工合并）。
 
-合成一条是因为稳定版发布时两个分支的目标 tag 相同、三个哈希也必然相同，拆成两条会各跑一遍 go modules / pnpm 两个 FOD 真构建。于是 alpha 阶段在「目标就是 main 这次要升到的 tag」时直接复用 main 阶段算出的 pin，在「目标就是 main 已经在的 tag」时直接把 `alpha-release` 置为 main 的 commit（同 SHA，零哈希轮换；内容没变则连 push 都省掉，不触发 CI）。
+两个分支共用这一轮算出的哈希：稳定版时在 main 的 checkout 上轮换一次，`alpha-release` 把这三个文件取过去（方向只能是 main → alpha，见 AGENTS.md）；预发布时 main 不动，轮换就在 `alpha-release` 上做。稳定版且 `main` 已在该 tag 时，`alpha-release` 直接置为 main 的 commit，连轮换都省掉。
 
-手动触发（可分别指定两个分支的目标 tag）：
+手动触发（一个 tag 同时决定两个分支）：
 
 ```bash
-gh workflow run update.yml                                   # 两个分支都自动解析
-gh workflow run update.yml -f tag=v3.9.0                     # main 指定 tag
-gh workflow run update.yml -f alpha_tag=v3.8.7-alpha.1       # alpha-release 指定 tag
-gh workflow run update.yml -f force=true                     # tag 未变也重算哈希
+gh workflow run update.yml                             # 自动解析最高版本 release
+gh workflow run update.yml -f tag=v3.9.0               # 稳定版：alpha + main PR
+gh workflow run update.yml -f tag=v3.8.7-alpha.1       # 预发布：只滚 alpha-release
+gh workflow run update.yml -f force=true               # tag 未变也重算哈希
 ```
 
 ### 一次性设置：GitHub App

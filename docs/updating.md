@@ -31,29 +31,28 @@
 
 正则锚定到语义块（`fetchFromGitHub { ... hash = ... }`、`vendorHash`、`fetchPnpmDeps { ... }`）且强制断言恰好匹配 1 处，不匹配就报错——绝不像写死缩进的 `sed` 那样静默跳过。手动迭代时（改完 Push 再推）仍可看 CI 日志里的 `got: sha256-...`，架构无关、两个 matrix 一致。
 
-### alpha-release 分支（预发布滚动跟踪）
-
-`alpha-release` 追「正式 / beta / alpha 三者中版本最高的那个 release」，由同一条 `update.yml` 在 main 阶段之后滚动，**force-push 直接落盘**，不开 PR——上游 alpha 一天能发好几个（`v3.8.6-alpha.1..10`），逐个开 PR 会淹没真正要人看 CI 的 main 升级单。验收同样由该分支上的 `build.yml` 给出（含 darwin）。
-
-三个不能动的点：
-
-1. **checkout 必须是 `alpha-release` 本身**：该分支的 tag/哈希与 `main` 不同，从 `main` 起算会把 `main` 的 pin 当基准，可能把分支回退到旧正式版。
-2. **推送必须用 App 令牌**：`GITHUB_TOKEN` 产生的 push 事件不触发其它 workflow，用默认令牌推等于没有 CI。
-3. **该分支不合回 `main`**：`main` 只追稳定版，两者是独立的滚动序列。
-
 ### 自动升级（GitHub Actions）
 
-`.github/workflows/update.yml` 把上面这套 SOP 自动化，每天北京时间 03:17（= 前一天 19:17 UTC）跑一次，**一条流水线同时喂 `main` 与 `alpha-release`**（也可 `workflow_dispatch`，可传入 `tag` / `alpha_tag` / `force`）。流程：
+`.github/workflows/update.yml` 把上面这套 SOP 自动化，每天北京时间 03:17（= 前一天 19:17 UTC）跑一次（也可 `workflow_dispatch`，可传入 `tag` / `force`）。一次运行只解析**一个**目标 release——正式/beta/alpha 中版本最高的那个（`git ls-remote` + tag 正则，滤掉 `v202205311650-dev` 这类非版本 tag）：
 
-1. **阶段一（main）**：`python3 scripts/update.py` 检测上游最新 **稳定** tag（`git ls-remote` + `vX.Y.Z` 正则，滤掉 `-alpha`/`-beta` 与 `v202205311650-dev` 这类非版本 tag），与现行 tag 相同则直接退出；否则提交到 `auto-update/siyuan-<tag>` 分支并开 PR（同一 tag 已有开启的 PR 时只跳过开单，分支照建——阶段二要用它上面的 pin）。
-2. **阶段二（alpha-release）**：按「能不能复用阶段一的成果」分三种：
-   - 目标 tag == `main` 当前 pin 的 tag → `git reset --hard origin/main`，该分支直接变成 main 的那个 commit（同 SHA，零哈希轮换）。只有「分支 tip 已经是 main 的那个 commit」时才跳过（不 push、不触发 CI）——这里比的是 **commit 而非 tree**：「tree 相同但 SHA 不同」正是要消掉的重复，比 tree 会让它永远对齐不过来。
-   - 目标 tag == main 本次要升到的 tag（PR 还没合）→ 直接取 `auto-update/siyuan-<tag>` 分支的 `flake.nix` + `pkgs/*.nix`，不重跑两个 FOD 构建。
-   - 否则（最新是预发布）→ 在 `alpha-release` 的 checkout 上跑 `scripts/update.py --channel=any`，做一次完整轮换。
+1. **`alpha-release` 总是滚到它**，force-push 直接落盘，不开 PR（上游 alpha 一天能发好几个 `v3.8.6-alpha.1..10`，逐个开 PR 会淹没真正要人看 CI 的 main 升级单）。该分支不合回 `main`。
+2. **该 release 是稳定版（`vX.Y.Z`，无预发布后缀）时，同时给 `main` 开 PR**：提交到 `auto-update/siyuan-<tag>` 分支（同一 tag 已有开启的 PR 时只跳过开单，分支照建——alpha 那一步要用它上面的 pin），人工点合并。
 
-合在一条流水线里的原因：稳定版发布时两个分支的目标 tag 相同、三个哈希也必然相同，拆成两条会各跑一遍 go modules / pnpm 两个 FOD 真构建、各占一个 runner。剩下的 CI 重复不用管——tag + 哈希一致 ⇒ 推导 store path 一致 ⇒ 第二次构建是 cachix 命中，push 已存在的路径是 no-op。
+两个分支共用这一轮唯一的哈希轮换，落点取决于目标是不是稳定版：
 
-真正的跨平台验收仍是 `build.yml`：main 侧在该 PR 上运行（含 `aarch64-darwin`），人工点合并；alpha 侧在该分支的 push 上运行。
+| 目标 | 在哪个 checkout 上轮换 | `alpha-release` 怎么拿到 pin |
+| --- | --- | --- |
+| 稳定版，main 需要升级 | `main` | 取 `auto-update/siyuan-<tag>` 分支的 `flake.nix` + `pkgs/*.nix` |
+| 稳定版，main 已在该 tag | 不轮换 | `git reset --hard origin/main`，直接变成 main 的 commit |
+| 预发布 | `alpha-release` | 就是它自己 |
+
+方向只能是 main → alpha：`main` 是 `flake.nix` 内容（内核接线、NixOS 模块）的权威来源，`alpha-release` 只是在其上叠了 pin 的滚动分支，反过来会把 main 的改动悄悄回退掉。
+
+「main 已在该 tag」那一行里，只有分支 tip **已经是 main 的那个 commit** 时才跳过（不 push、不触发 CI）——比的是 **commit 而非 tree**：「tree 相同但 SHA 不同」正是要消掉的重复，比 tree 会让它永远对齐不过来。
+
+只解析一个目标、只轮换一次的原因：稳定版发布时两个分支的目标 tag 相同、三个哈希也必然相同，各跑一遍就是 go modules / pnpm 两个 FOD 各真构建两次。剩下的 CI 重复不用管——tag + 哈希一致 ⇒ 推导 store path 一致 ⇒ 第二次构建是 cachix 命中，push 已存在的路径是 no-op。
+
+真正的跨平台验收仍是 `build.yml`：main 侧在该 PR 上运行（含 `aarch64-darwin`），人工点合并；alpha 侧在该分支的 push 上运行。alpha-release 那一步还有三个不能动的点：checkout 必须是 `alpha-release` 本身（否则把 main 的 pin 当基准，可能回退到旧正式版）；推送必须用 App 令牌（`GITHUB_TOKEN` 产生的 push 事件不触发其它 workflow）；该分支不合回 `main`。
 
 **身份与秘钥**：workflow 用 GitHub App 令牌而非 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不触发其它 workflow，那样 PR 上的 `build.yml` 会停在 `action_required` 需人工批准。因此需一个 GitHub App（repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`；权限只给 `Contents: Read and write` 与 `Pull requests: Read and write`），这样 PR 作者是 `<app>[bot]`、其 `pull_request` 事件能自动触发 CI。一次性创建步骤见 README 的“自动升级”一节；私钥丢失/轮换时重建后更新这两个值即可。
 

@@ -8,7 +8,6 @@
     scripts/update.py --force        # tag 未变也重算哈希（改了影响 FOD 内容的东西后要用）
     scripts/update.py --build        # 升级后再冒烟构建 siyuan-server
     scripts/update.py --print-pins   # 以 JSON 打印当前 pin 的 tag 与三个哈希后退出
-    scripts/update.py --print-pins --rev origin/main   # 同上，但读指定 git rev 而非工作区
     scripts/update.py --print-latest # 按 --channel 打印上游最新 tag 后退出（只查 remote，不改文件）
 
 三个 FOD 及其哈希位置:
@@ -97,18 +96,8 @@ def run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         raise UpdateError(f"命令不存在: {cmd[0]}") from exc
 
 
-def file_text(repo: Path, relpath: str, rev: str | None) -> str:
-    """读工作区文件，或 rev 给定版本里的该文件（`git show`，用于不 checkout 就看别的分支）。"""
-    if rev is None:
-        return (repo / relpath).read_text(encoding="utf-8")
-    proc = run(["git", "show", f"{rev}:{relpath}"], cwd=repo)
-    if proc.returncode != 0:
-        raise UpdateError(f"git show {rev}:{relpath} 失败:\n{proc.stderr.strip()}")
-    return proc.stdout
-
-
-def _match_one(repo: Path, pin: Pin, rev: str | None = None) -> tuple[str, re.Match[str]]:
-    text = file_text(repo, pin.relpath, rev)
+def _match_one(repo: Path, pin: Pin) -> tuple[str, re.Match[str]]:
+    text = (repo / pin.relpath).read_text(encoding="utf-8")
     matches = list(pin.pattern.finditer(text))
     if len(matches) != 1:
         raise UpdateError(
@@ -118,8 +107,8 @@ def _match_one(repo: Path, pin: Pin, rev: str | None = None) -> tuple[str, re.Ma
     return text, matches[0]
 
 
-def read_pin(repo: Path, pin: Pin, rev: str | None = None) -> str:
-    return _match_one(repo, pin, rev)[1].group("value")
+def read_pin(repo: Path, pin: Pin) -> str:
+    return _match_one(repo, pin)[1].group("value")
 
 
 def write_pin(repo: Path, pin: Pin, value: str) -> None:
@@ -188,12 +177,12 @@ def resolve_fod(repo: Path, installable: str) -> str:
     raise UpdateError(f"无法从 `nix build {installable}` 的输出中提取哈希，日志尾部:\n{tail}")
 
 
-def current_pins(repo: Path, rev: str | None = None) -> dict[str, str]:
+def current_pins(repo: Path) -> dict[str, str]:
     return {
-        "tag": read_pin(repo, TAG, rev),
-        "src": read_pin(repo, SRC, rev),
-        "vendorHash": read_pin(repo, VENDOR, rev),
-        "pnpmDeps": read_pin(repo, PNPM, rev),
+        "tag": read_pin(repo, TAG),
+        "src": read_pin(repo, SRC),
+        "vendorHash": read_pin(repo, VENDOR),
+        "pnpmDeps": read_pin(repo, PNPM),
     }
 
 
@@ -259,11 +248,6 @@ def main(argv: list[str] | None = None) -> int:
         help="按 --channel 打印上游最新 tag 后退出（只查 remote，不改文件）",
     )
     parser.add_argument(
-        "--rev",
-        metavar="REV",
-        help="--print-pins 从该 git rev 读取（如 origin/main）而不是工作区",
-    )
-    parser.add_argument(
         "--repo",
         type=Path,
         default=Path(__file__).resolve().parent.parent,
@@ -277,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             print(latest_tag(repo, args.channel))
             return 0
         if args.print_pins:
-            print(json.dumps(current_pins(repo, args.rev), ensure_ascii=False))
+            print(json.dumps(current_pins(repo), ensure_ascii=False))
             return 0
         return update(repo, args.tag, channel=args.channel, force=args.force, build=args.build)
     except UpdateError as exc:
