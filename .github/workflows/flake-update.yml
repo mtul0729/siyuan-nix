@@ -77,7 +77,6 @@ jobs:
     uses: ./.github/workflows/accept.yml
     with:
       ref: auto-update/flake-lock
-      prefetch: true
     secrets:
       cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
