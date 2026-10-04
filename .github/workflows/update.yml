@@ -130,7 +130,6 @@ jobs:
     uses: ./.github/workflows/accept.yml
     with:
       ref: ${{ needs.prepare.outputs.branch }}
-      prefetch: true
     secrets:
       cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 

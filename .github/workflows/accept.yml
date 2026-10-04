@@ -1,16 +1,16 @@
 name: Build matrix
 
 # 可复用的构建验收：给定 ref，在三个平台上构建并推 cachix。
-# 被三处调用，共用同一份「什么算绿」的定义：
-#   build.yml        人工 push / PR / 手动触发
-#   update.yml       版本升级直推 main 之前的闸门
-#   flake-update.yml nixpkgs lock 更新直推 main 之前的闸门
+# 同时它自己就是 PR / 人工 push / 手动触发的入口（不再需要 build.yml 这层壳）：
+#   workflow_call      → update.yml、flake-update.yml 在直推 main 之前调用它做闸门
+#   push / PR / 手动   → 直接对当前 commit 验收
+# 三种触发共用同一份「什么算绿」的定义，不会出现「调用方说绿、单独跑说红」的矛盾。
 #
 # 把关口径：稳定版两套包决定红绿；抢先版（-alpha）与内核测试只记录不把关
 # （上游预发布自带问题很常见，内核测试在沙箱里必然有失败包，见 AGENTS.md）。
 #
-# 为什么抽成 workflow_call 而不是复制三份：三个调用方对「验收」的定义必须完全一致，
-# 否则会出现「update.yml 说绿、build.yml 说红」这种自相矛盾的信号。
+# 注意：自动化直推 main 用的是 GITHUB_TOKEN，其 push 事件不会再触发本 workflow（GitHub 的规定）。
+# 那部分验收由调用方在自己的 workflow 内跑到这里完成，不依赖触发。
 on:
   workflow_call:
     inputs:
@@ -19,15 +19,14 @@ on:
         required: false
         default: ''
         type: string
-      prefetch:
-        description: '是否额外构建两个 FOD 预取推导（把它们送进 cachix）'
-        required: false
-        default: true
-        type: boolean
     secrets:
       cachix-auth-token:
         description: CACHIX auth token；为空则跳过缓存推送。
         required: false
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -87,8 +86,9 @@ jobs:
         continue-on-error: true
         run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
 
+      # 预取推导只在非 PR 的运行里跑：PR 上跑它纯属浪费，那些 FOD 由其它运行送进 cachix 就够了
       - name: Build prefetch derivations
-        if: inputs.prefetch && matrix.server
+        if: matrix.server && github.event_name != 'pull_request'
         run: |
           nix build -L .#siyuan-server.passthru.kernel.goModules
           nix build -L .#siyuan-server.passthru.ui.pnpmDeps
