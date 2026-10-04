@@ -94,3 +94,19 @@ jobs:
           nix build -L .#siyuan-server.passthru.ui.pnpmDeps
           nix build -L .#siyuan-server-alpha.passthru.kernel.goModules
           nix build -L .#siyuan-server-alpha.passthru.ui.pnpmDeps
+
+      # 同步把本轮构建的产物送进 cachix：cachix-action 的 daemon 模式是异步上传，
+      # job 结束时 daemon 被杀死，大路径（electron 等）经常来不及传完就丢了——表现为
+      # 「下次构建没用上缓存、从头重编」。这里显式阻塞推送各包输出及其闭包，保证落地。
+      # 已缓存的路径是 no-op。PR 不推送（避免把未合并的代码塞进共享缓存）。
+      - name: Push built paths to cachix
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          paths="$(nix path-info .#siyuan-client) $(nix path-info .#siyuan-client-alpha)"
+          if [ "${{ matrix.server }}" = "true" ]; then
+            paths="$paths $(nix path-info .#siyuan-server) $(nix path-info .#siyuan-server-alpha)"
+          fi
+          for p in $paths; do
+            cachix push mtul "$p"
+          done
