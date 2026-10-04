@@ -1,50 +1,60 @@
 # AGENTS.md
 
-Nix flake packaging SiYuan (note server + Electron client + NixOS module) from the upstream `siyuan-note/siyuan` tag. Layout: `flake.nix` (wiring, tag/version, NixOS module) + `pkgs/siyuan-{kernel,ui,server,client}.nix` + `scripts/update.py` (tag bump + FOD hash rotation). Human-facing docs live in `README.md`; deeper background in `docs/updating.md` (update SOP, FOD hash invariant) and `docs/upstream-issues.md` (deferred upstream reports).
+Nix flake packaging SiYuan (note server + Electron client + NixOS module) from the upstream `siyuan-note/siyuan` tag. Layout: `flake.nix` (two pin sets + wiring + NixOS module) + `pkgs/siyuan-{kernel,ui,server,client}.nix` (shared by both variants, hashes injected as arguments) + `scripts/update.py` (tag bumps + FOD hash rotation). Human-facing docs live in `README.md`; deeper background in `docs/updating.md` (update SOP, FOD hash invariant) and `docs/upstream-issues.md` (deferred upstream reports).
+
+**Two variants on one branch (`main`)**, distinguished by package name, not by branch:
+
+| variant | tracks | packages |
+| --- | --- | --- |
+| `stable` | newest stable tag (`vX.Y.Z`) | `siyuan-server`, `siyuan-client` |
+| `alpha` | highest of stable/`-beta.N`/`-alpha.N` | `siyuan-server-alpha`, `siyuan-client-alpha` |
+
+flake.nix holds 8 pins (`stableTag`/`stableSrc`/`stableVendorHash`/`stablePnpmDeps` + the same four with `alpha`), all rewritten by `scripts/update.py`. The NixOS module, `default` output and the kernel-test check all use the **stable** variant.
 
 **Platform scope**: the server package (and therefore the NixOS module and its kernel-test check) is Linux-only; the desktop client also builds on `aarch64-darwin`. The two packages the client depends on (`siyuan-kernel`, `siyuan-ui`) declare darwin support for that reason, even though nothing else uses them there — see the darwin gotcha below.
 
 ## Commands
 
 ```bash
-nix build -L .#siyuan-server         # server package (Linux only)
+nix build -L .#siyuan-server         # server package, stable (Linux only)
+nix build -L .#siyuan-server-alpha   # server package, newest release incl. prereleases (Linux only)
 nix build -L .#siyuan-client         # Electron desktop client (linux + aarch64-darwin)
+nix build -L .#siyuan-client-alpha   # desktop client, newest release incl. prereleases
 nix build -L .#checks.<system>.siyuan-kernel-test   # kernel go test (via passthru.kernel + overrideAttrs; Linux only)
 nix build -L .#siyuan-server.passthru.kernel   # kernel derivation (no tests)
 nix flake check --no-build --all-systems   # eval-only validation of all three systems
-./scripts/update.py [vX.Y.Z]       # bump tag + rotate the three FOD hashes (needs network + nix)
-./scripts/update.py --channel=any  # same, but pick the highest of stable/beta/alpha (alpha-release)
-./scripts/update.py --print-pins     # print the currently pinned tag/hashes as JSON
+./scripts/update.py                # bump both pin sets to their own targets + rotate FOD hashes (needs network + nix)
+./scripts/update.py --print-targets  # print both resolved targets as JSON
+./scripts/update.py --print-pins     # print all 8 pins as JSON
 ```
 
-There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the client and its inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). Pushing to `main` or `alpha-release` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`. The auto-update workflow additionally needs a GitHub App (repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`; permissions `Contents: Read and write` + `Pull requests: Read and write`, nothing else) — its token is what makes the upgrade PR's `pull_request` events run `build.yml` automatically; with the built-in `GITHUB_TOKEN` such a PR sits at `action_required` waiting for manual approval. See the "自动升级" section of README.md for the one-time setup. A separate workflow, `.github/workflows/flake-update.yml`, runs `nix flake update` weekly (plus `workflow_dispatch`): it builds server+client on x86_64-linux and, on success, pushes `flake.lock` straight to `main` (App token, so `build.yml`'s full matrix rechecks it and a red run auto-opens a tracking issue); on failure it opens the issue without merging. It only ever touches `flake.lock` — never the tag or FOD hashes — and never touches `alpha-release`, whose lock `update.yml` syncs from `main` on every run (so alpha lags by at most a day, and pins-only/lock-only changes each still push).
+There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/build.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the clients and their inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). **The stable packages gate the run; the `-alpha` ones are `continue-on-error`** (upstream prereleases carry their own breakage — e.g. `v3.8.7-alpha.3`'s darwin client dies with `spawn python3 ENOENT` — so they must not decide main's colour; read that step's log instead). Pushing to `main` triggers CI; for other branches use `gh workflow run build.yml --ref <branch>`. The auto-update workflow needs a GitHub App (repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`; permissions `Contents: Read and write` + `Pull requests: Read and write`) because `GITHUB_TOKEN`-produced events don't trigger other workflows — with it, the bot's push to `main` fires `build.yml`; without it there is no acceptance signal at all. See the "自动升级" section of README.md for the one-time setup. A separate workflow, `.github/workflows/flake-update.yml`, runs `nix flake update` weekly (plus `workflow_dispatch`): it gates on eval + an x86_64-linux build of both packages, pushes `flake.lock` straight to `main` on success (App token, so `build.yml`'s full matrix rechecks it and a red run auto-opens a tracking issue), and opens the issue without merging on failure. It only ever touches `flake.lock` — never the tags or FOD hashes.
 
 ## Update / hash workflow
 
-Run `./scripts/update.py [vX.Y.Z]` (Python 3, stdlib only): it rewrites `tag`, then rotates the three fixed-output hash pins — `src` in `flake.nix` (`fetchFromGitHub.hash`), `vendorHash` in pkgs/siyuan-kernel.nix and `pnpmDeps` in pkgs/siyuan-ui.nix. The hashes have no offline way to be precomputed, so the script resolves them itself: it writes a placeholder hash (the only way to force a real FOD build instead of a silent store-path collision), then reads the true value from `nix`'s `hash mismatch ... got: sha256-...` output; `src` is prefetched instead with `nix-prefetch-url --unpack` (verified to equal `fetchFromGitHub.hash`). Any failure rolls all four pins back. Pass `--force` to rotate hashes without a tag change, `--build` to smoke-build the server afterwards. The user prefers iterating via GitHub Actions logs over local builds.
+Run `./scripts/update.py` (Python 3, stdlib only): it resolves each variant's target tag, then for each one rewrites its tag pin and rotates its three fixed-output hash pins — `src` (`fetchFromGitHub` of the upstream tarball), `vendorHash` (go modules) and `pnpmDeps` (pnpm store). All eight values live in `flake.nix`; `pkgs/siyuan-kernel.nix` and `pkgs/siyuan-ui.nix` take the hashes as **arguments** so both variants share one copy of the packaging logic. The hashes have no offline way to be precomputed, so the script resolves them itself: it writes a placeholder hash (the only way to force a real FOD build instead of a silent store-path collision), then reads the true value from `nix`'s `hash mismatch ... got: sha256-...` output; `src` is prefetched instead with `nix-prefetch-url --unpack` (verified to equal `fetchFromGitHub.hash`). Any failure restores `flake.nix` byte-for-byte. Pass `--stable <tag>` / `--alpha <tag>` to pin one variant explicitly, `--force` to rotate hashes without a tag change, `--build` to smoke-build both server packages afterwards. The user prefers iterating via GitHub Actions logs over local builds.
 
+- When both variants resolve to the same tag (the newest release *is* stable) the script rotates once and writes the result to both pin sets — same tag ⇒ same FOD content ⇒ same hashes, so there is nothing to build twice.
 - The pnpm hash is arch-independent; both matrix jobs print the same value.
-- Prefetch derivations exist for this: `.#siyuan-server.passthru.kernel.goModules` and `.#siyuan-server.passthru.ui.pnpmDeps`.
+- Prefetch derivations exist for each variant: `.#siyuan-server.passthru.kernel.goModules` / `.#siyuan-server.passthru.ui.pnpmDeps` and the `-alpha` equivalents.
 - Full rationale and step-by-step: `docs/updating.md`.
 
-Automated path: `.github/workflows/update.yml` runs daily on the default branch (and via `workflow_dispatch`, with optional `tag` / `alpha_tag` / `force` inputs). It resolves **two independent targets** and feeds one branch each:
+Automated path: `.github/workflows/update.yml` runs daily on the default branch (and via `workflow_dispatch`, with optional `stable_tag` / `alpha_tag` / `force` inputs). It resolves **two independent targets** and rewrites one pin set each:
 
-- **main** → the newest *stable* tag (`vX.Y.Z` only), pushed straight to `main` by the bot as `<app>[bot]`.
-- **alpha-release** → the highest tag among stable/`-beta.N`/`-alpha.N` (`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`), force-pushed directly (upstream ships many alphas a day; per-alpha PRs would drown the real upgrade PRs). `alpha-release` is never merged into `main`.
+- **stable** → the newest *stable* tag (`vX.Y.Z` only) → `siyuan-server` / `siyuan-client`.
+- **alpha** → the highest tag among stable/`-beta.N`/`-alpha.N` (`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`) → the `-alpha` packages.
 
-No PRs anywhere: the acceptance signal is `build.yml` firing on each branch's own push. A red push is reverted with `git revert`, not gated in advance.
+No PRs anywhere: the acceptance signal is `build.yml` firing on the push to `main` (stable packages gate it, `-alpha` are informational). A red push is reverted with `git revert`, not gated in advance.
 
-Two targets, never one: deriving main's target from "the highest release" would let a newer alpha shadow a just-released stable — upstream ships the next version's alpha right after a stable (`v3.8.6` → `v3.8.7-alpha.1`), so when `v3.8.7` lands there is likely already a `v3.8.8-alpha.1` in the same window; the single highest tag is then the alpha and main never gets its `v3.8.7` PR, stranding it on the old stable. Stable resolution must be independent of prereleases.
+Two targets, never one: deriving stable's target from "the highest release" would let a newer alpha shadow a just-released stable — upstream ships the next version's alpha right after a stable (`v3.8.6` → `v3.8.7-alpha.1`), so when `v3.8.7` lands there is likely already a `v3.8.8-alpha.1` in the same window; the single highest tag is then the alpha and stable would never move to `v3.8.7`, stranding `siyuan-server` on the old stable. Stable resolution must be independent of prereleases.
 
-Dedupe happens only when the two targets coincide (the newest release *is* stable): then `alpha-release` is simply set to main's tip — one rotation, none thrown away. When the newest release is a prerelease the two genuinely differ, so `alpha-release` rotates once — that second rotation is unavoidable, not waste.
+Previously the two variants lived on two branches (`main` + `alpha-release`); that was abandoned because main-only content (workflows, the shared composite action, packaging fixes) never reached the other branch and its own `build.yml` broke on missing files or stale code. One branch with two package names makes that whole class of failures impossible.
 
-`alpha-release` is always **rebuilt on top of main's current tip**, never extended from its own previous tip: main-only content (workflows, the shared composite action, packaging fixes) otherwise never reaches it and its own `build.yml` breaks on missing files or stale code — that already happened once (2026-10: it lacked `.github/actions/setup` and the build couldn't resolve the action). Rebuilding from main means alpha = main + pins, always.
-
-Second automated path: `.github/workflows/flake-update.yml` runs `nix flake update` weekly (Sunday 19:03 UTC / Monday 03:03 Beijing) and pushes the new `flake.lock` to `main`, then syncs just that file onto `alpha-release` (never its tag/hash pins — it may be sitting on a prerelease). It gates on `nix flake check --no-build` + an x86_64-linux build of both packages before pushing (darwin can't be built on a Linux runner), then a second job watches the `build.yml` run each push triggers on both branches and opens/updates an issue if either is red. `alpha-release` needs the sync because it only ever resets to `main` when the newest release happens to be stable — otherwise its lock would stay on the old nixpkgs.
+Second automated path: `.github/workflows/flake-update.yml` runs `nix flake update` weekly (Sunday 19:03 UTC / Monday 03:03 Beijing) and pushes the new `flake.lock` to `main`. It gates on `nix flake check --no-build` + an x86_64-linux build of both packages before pushing (darwin can't be built on a Linux runner), then a second job watches the `build.yml` run that push triggers and opens/updates an issue if it is red.
 
 All three workflows share `.github/actions/setup` (composite action): install-nix + cachix daemon, with `access-tokens = github.com=${{ github.token }}` so Nix can fetch private/ rate-limited GitHub inputs. Cachix push is skipped when `CACHIX_AUTH_TOKEN` is empty (e.g. forks).
 
-One pipeline rather than two because at stable releases both branches want the same tag, hence the same three hashes — split, the go-modules and pnpm FODs would each be really built twice on two runners. What CI duplication remains is free: identical tag+hashes ⇒ identical store paths ⇒ the second build is a cachix hit and pushing existing paths is a no-op. `nix-update` stays unusable here (crashes on `unsafeGetAttrPos "version"`, even with `--version=skip`) — see `docs/updating.md`.
+`nix-update` stays unusable here (crashes on `unsafeGetAttrPos "version"`, even with `--version=skip`) — see `docs/updating.md`.
 
 ## Gotchas
 

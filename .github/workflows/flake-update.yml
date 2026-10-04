@@ -3,16 +3,14 @@ name: Update flake lock
 # 与 update.yml（SiYuan 版本升级）正交：那条流水线只动 tag 和三个 FOD 哈希，
 # 这里只跑 `nix flake update` 跟进 flake.lock 里的输入（目前仅 nixpkgs/nixos-unstable）。
 #
-# 不走 PR：构建通过就把 lock 直接推上 main，并同步一份到 alpha-release（只改 flake.lock，
-# 不动两个分支各自的 tag/哈希 pin——alpha-release 可能正停在预发布上）。验收分两层——
-#   1) 推送前：本 workflow 在 x86_64-linux 上 nix build 两个包 + nix flake check 求值；
+# 不走 PR：构建通过就把 lock 直接推上 main，失败则开 issue 通知。验收分两层——
+#   1) 推送前：本 workflow 在 x86_64-linux 上 nix build 两套包 + nix flake check 求值；
 #   2) 推送后：App 令牌的 push 会触发 build.yml 全矩阵（aarch64-linux / aarch64-darwin
-#      只能在这里验证），第二个 job 盯着两个分支各自那次运行，红了就开 issue。
+#      只能在这里验证），第二个 job 盯着那次运行，红了就开 issue。
 # darwin 不在推送前那层是刻意的：本机（ubuntu runner）编不了 aarch64-darwin，
 # 拦不住就只能靠推送后的全矩阵 + 通知兜底。
-#
-# 为什么两个分支都要同步：alpha-release 只在「最新 release 恰好是稳定版」时才会 reset 到 main，
-# 期间它自己的 flake.lock 会一直停在旧 nixpkgs 上，预发布包也就一直用旧依赖验证。
+# 只涉及 main 一个分支：两套 pin（stable / alpha）都在同一个 flake.nix 里，
+# 不存在「另一个分支的 lock 落后」这回事。
 #
 # 身份必须是 GitHub App 令牌：GitHub 规定 GITHUB_TOKEN 产生的事件不触发其它 workflow——
 # 用它 push main，build.yml 根本不会跑。App 的一次性配置见 README「自动升级」一节，
@@ -47,7 +45,6 @@ jobs:
       old_rev: ${{ steps.lock.outputs.old_rev }}
       new_rev: ${{ steps.lock.outputs.new_rev }}
       sha: ${{ steps.push.outputs.sha }}
-      alpha_sha: ${{ steps.alpha.outputs.sha }}
     steps:
       # 先取 App 令牌，再让 checkout 用它，这样 git push 是 App 身份，能触发 build.yml
       - id: app-token
@@ -113,35 +110,6 @@ jobs:
             printf '全矩阵复核（含 aarch64-linux / aarch64-darwin）由 push 触发的 `build.yml` 进行，红了会自动开 issue。\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # 同步到 alpha-release：只落 flake.lock，保留该分支自己的 tag/哈希 pin
-      # （它可能正停在一个预发布上，绝不能顺手把它拉回 main）。
-      - name: Sync flake.lock to alpha-release
-        id: alpha
-        if: steps.lock.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-        run: |
-          set -euo pipefail
-          git fetch --depth=1 origin "+refs/heads/alpha-release:refs/remotes/origin/alpha-release"
-          git checkout -B alpha-release origin/alpha-release
-          git checkout '${{ steps.push.outputs.sha }}' -- flake.lock
-          if git diff --quiet HEAD; then
-            echo "alpha-release 的 flake.lock 已是同一份，无需同步。" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          # commit 归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID）
-          bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git add flake.lock
-          git commit -m "flake.lock: update"
-          # 该分支归自动化所有，force 覆盖以保持幂等
-          git push --force origin "HEAD:refs/heads/alpha-release"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "同步 \`flake.lock\` 到 \`alpha-release\`（保留该分支自己的 tag/哈希）。" >> "$GITHUB_STEP_SUMMARY"
-
       # 通知用 GITHUB_TOKEN 就够：issue 不需要触发其它 workflow
       - name: Notify on failure (pre-push gate)
         if: failure() && steps.lock.outputs.changed == 'true'
@@ -164,70 +132,50 @@ jobs:
 
   # 推上去之后盯 build.yml 的全矩阵运行（aarch64-linux / darwin 只在这里能验证），
   # 红了开 issue。schedule 失败本身也会有邮件，但 issue 是可跟踪、可关的提醒。
-  # main 与 alpha-release 都要盯：两个分支各自的 push 都会触发一次全矩阵。
   watch:
     needs: update
     if: needs.update.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Watch post-push build.yml runs
+      - name: Watch post-push build.yml run
         id: watch
         env:
           GH_TOKEN: ${{ github.token }}
-          MAIN_SHA: ${{ needs.update.outputs.sha }}
-          ALPHA_SHA: ${{ needs.update.outputs.alpha_sha }}
         run: |
-          # 不用 -e：下面要收集每个分支的结果，失败自己处理
-          set -uo pipefail
-          failed=""
-          for entry in "main:$MAIN_SHA" "alpha-release:$ALPHA_SHA"; do
-            branch="${entry%%:*}"
-            sha="${entry##*:}"
-            if [[ -z "$sha" ]]; then
-              continue
-            fi
+          set -euo pipefail
+          sha='${{ needs.update.outputs.sha }}'
 
-            # push 事件注册成 run 有延迟，轮询等它出现
-            run_id=""
-            for _ in $(seq 1 30); do
-              run_id="$(gh run list --workflow=build.yml --commit "$sha" --limit 1 \
-                --json databaseId --jq '.[0].databaseId // empty' || true)"
-              if [[ -n "$run_id" ]]; then
-                break
-              fi
-              sleep 10
-            done
-            if [[ -z "$run_id" ]]; then
-              echo "::warning::$branch：没找到 build.yml 的运行（commit $sha）"
-              continue
+          # push 事件注册成 run 有延迟，轮询等它出现
+          run_id=""
+          for _ in $(seq 1 30); do
+            run_id="$(gh run list --workflow=build.yml --commit "$sha" --limit 1 \
+              --json databaseId --jq '.[0].databaseId // empty' || true)"
+            if [[ -n "$run_id" ]]; then
+              break
             fi
-
-            if gh run watch "$run_id" --exit-status --interval 60; then
-              echo "$branch: 绿"
-            else
-              echo "::error::$branch: build.yml 运行 $run_id 未通过"
-              failed="$failed $branch($run_id)"
-            fi
+            sleep 10
           done
-          failed="$(echo "$failed" | xargs)"
-          echo "failed=$failed" >> "$GITHUB_OUTPUT"
-          if [[ -n "$failed" ]]; then
-            exit 1
+          if [[ -z "$run_id" ]]; then
+            echo "::warning::没找到 build.yml 的运行（commit $sha），跳过监视。"
+            exit 0
           fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          gh run watch "$run_id" --exit-status --interval 60
 
       - name: Notify on failure (post-push)
-        if: failure() && steps.watch.outputs.failed != ''
+        if: failure() && steps.watch.outputs.run_id != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           title="flake.lock 自动更新后全矩阵构建失败"
-          body="$(printf '%s\n\nnixpkgs `%s` → `%s` 推上分支后，`build.yml` 全矩阵未通过：`%s`。\n\nmain: %s\nalpha-release: %s\n' \
+          sha='${{ needs.update.outputs.sha }}'
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.watch.outputs.run_id }}"
+          body="$(printf '%s\n\nnixpkgs `%s` → `%s` 推上 main 后，`build.yml` 全矩阵未通过。\n\ncommit: %s\n[查看运行日志](%s)' \
             "$(date -u '+%Y-%m-%d %H:%M UTC')" \
             "${{ needs.update.outputs.old_rev }}" "${{ needs.update.outputs.new_rev }}" \
-            "${{ steps.watch.outputs.failed }}" \
-            "https://github.com/${{ github.repository }}/commit/${{ needs.update.outputs.sha }}" \
-            "https://github.com/${{ github.repository }}/commit/${{ needs.update.outputs.alpha_sha }}")"
+            "https://github.com/${{ github.repository }}/commit/$sha" \
+            "$run_url")"
           num="$(gh issue list --state open --json number,title \
             --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
           if [[ -n "$num" ]]; then

@@ -6,6 +6,9 @@
   go_1_26,
   version,
   src,
+  # go modules 的 FOD 哈希：由 flake.nix 的 pin 注入（稳定版与抢先版各一份），
+  # 本文件不写死，好让两个版本共用同一份打包逻辑。
+  vendorHash,
   patches ? [ ],
 }:
 
@@ -17,14 +20,12 @@ let
 in
 buildGoModule {
   pname = "siyuan-kernel";
-  inherit version patches;
+  inherit version patches vendorHash;
 
   src = src + "/kernel";
 
   # 锁定与 go.mod 一致的工具链，避免沙箱内触发 GOTOOLCHAIN 自动下载
   go = go_1_26;
-
-  vendorHash = "sha256-wJInCkkyVIDR3DHsvyQMWVKramQzWTdpwAIXTzZOKrg=";
 
   tags = kernelTags;
   ldflags = [

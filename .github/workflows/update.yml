@@ -1,22 +1,19 @@
 name: Auto update SiYuan
 
-# 一条流水线、两个**独立**的目标，都由 bot 直推到对应分支（不开 PR）：
-#   main          → 最新稳定版（vX.Y.Z）
-#   alpha-release → 正式/beta/alpha 中版本最高者（滚动分支，force-push）
+# 一个分支（main）上维护两套 pin，两个**互相独立**的目标，都由 bot 直推：
+#   stable → 最新稳定版（vX.Y.Z）              ：siyuan-server / siyuan-client
+#   alpha  → 正式/beta/alpha 中版本最高者      ：siyuan-server-alpha / siyuan-client-alpha
 #
-# 为什么必须是两个目标而不是「解析一个最高版本、stable 时顺带推 main」：
-# 上游习惯是正式版一发就紧接着开下一个版本的 alpha（v3.8.6 之后立刻有 v3.8.7-alpha.1）。
-# 于是 v3.8.7 正式发布时，窗口里很可能已经有 v3.8.8-alpha.1，单次运行解析出的「最高版本」
-# 是那个 alpha，main 就永远拿不到 v3.8.7——停在旧稳定版上。stable 的解析必须独立。
+# 为什么必须是两个目标而不是「解析一个最高版本」：上游习惯正式版一发就紧接着开下一个版本的
+# alpha（v3.8.6 之后立刻有 v3.8.7-alpha.1），于是 v3.8.7 发布时窗口里很可能已有 v3.8.8-alpha.1，
+# 单一目标是那个 alpha，stable 那套 pin 就永远拿不到 v3.8.7。stable 的解析必须独立。
 #
-# 去重只发生在两者重合时（最新 release 恰好是稳定版）：那一轮哈希轮换只做一次，
-# alpha-release 直接取 main 算出的 pin（main 已在该 tag 时干脆 reset 成 main 的 commit）。
-# 方向固定 main → alpha：main 是 flake.nix 内容（内核接线、NixOS 模块）的权威来源，
-# alpha 只是叠了 pin 的滚动分支，反向复制会把 main 的改动悄悄回退掉。
+# 两个目标 tag 相同时（最新 release 恰好是正式版）只做一次哈希轮换，两套 pin 一起写——
+# 这就是过去「两个分支在稳定版重合」要去重的那部分，现在结构性消失了。
 #
 # 身份必须是 GitHub App 令牌：GitHub 规定 GITHUB_TOKEN 产生的事件不触发其它 workflow——
-# 用它 push 的话，main / alpha-release 上的 build.yml 根本不会跑，直推就失去了验收。
-# 验收信号就是两个分支各自的 push 触发的 build.yml。
+# 用它 push 的话 main 上的 build.yml 根本不会跑，直推就失去了验收。
+# 验收信号就是这次 push 触发的 build.yml：稳定版两套包把关，抢先版只记录不把关。
 #
 # 注意：schedule 触发要求本文件已存在于默认分支（main）。
 on:
@@ -25,12 +22,12 @@ on:
     - cron: '17 19 * * *'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'main 的目标 tag（如 v3.9.0）；留空则自动取上游最新稳定版'
+      stable_tag:
+        description: 'stable 的目标 tag（如 v3.9.0）；留空则自动取上游最新稳定版'
         required: false
         default: ''
       alpha_tag:
-        description: 'alpha-release 的目标 tag（如 v3.8.7-alpha.1）；留空则自动取正式/beta/alpha 中最高者'
+        description: 'alpha 的目标 tag（如 v3.8.8-alpha.1）；留空则自动取正式/beta/alpha 中最高者'
         required: false
         default: ''
       force:
@@ -39,12 +36,12 @@ on:
         default: false
         type: boolean
 
-# 同一时刻只跑一个，避免两次运行同时改 tag/开 PR；不取消进行中的运行（构建很贵）
+# 同一时刻只跑一个，避免两次运行同时改 pin / 同时推 main
 concurrency:
   group: auto-update-siyuan
   cancel-in-progress: false
 
-# GITHUB_TOKEN 只需只读：所有写操作（推分支、开 PR）都走下面的 GitHub App 令牌。
+# GITHUB_TOKEN 只需只读：写操作（git push）都走下面的 GitHub App 令牌。
 permissions:
   contents: read
 
@@ -52,7 +49,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      # 先取 App 令牌，再让 checkout 用它，这样 git push 与 gh 都是 App 身份。
+      # 先取 App 令牌，再让 checkout 用它，这样 git push 是 App 身份，能触发 build.yml
       - id: app-token
         uses: actions/create-github-app-token@v3.2.0
         with:
@@ -67,174 +64,74 @@ jobs:
         with:
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-      # 两个目标互不相干：stable 只认 vX.Y.Z，newest 是全部 tag 里的最高者。
-      # newest == stable 表示「最新 release 恰好是稳定版」，也就是两者本轮要做同一件事。
       - name: Resolve both targets
         id: target
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          INPUT_ALPHA_TAG: ${{ github.event.inputs.alpha_tag }}
+          INPUT_STABLE: ${{ github.event.inputs.stable_tag }}
+          INPUT_ALPHA: ${{ github.event.inputs.alpha_tag }}
         run: |
           set -euo pipefail
-          tag="$INPUT_TAG"
-          if [[ -z "$tag" ]]; then
-            tag="$(python3 scripts/update.py --print-latest)"
+          targets="$(python3 scripts/update.py --print-targets)"
+          stable="$(printf '%s' "$targets" | jq -r .stable)"
+          alpha="$(printf '%s' "$targets" | jq -r .alpha)"
+          if [[ -n "$INPUT_STABLE" ]]; then
+            stable="$INPUT_STABLE"
           fi
-          alpha_tag="$INPUT_ALPHA_TAG"
-          if [[ -z "$alpha_tag" ]]; then
-            alpha_tag="$(python3 scripts/update.py --channel=any --print-latest)"
-          fi
-          same=false
-          if [[ "$tag" == "$alpha_tag" ]]; then
-            same=true
+          if [[ -n "$INPUT_ALPHA" ]]; then
+            alpha="$INPUT_ALPHA"
           fi
           {
-            echo "tag=$tag"
-            echo "alpha_tag=$alpha_tag"
-            echo "same=$same"
-            # 本轮开始时 main 的 tip：alpha-release 要以它为基线（见阶段二）
-            echo "base=$(git rev-parse HEAD)"
+            echo "stable=$stable"
+            echo "alpha=$alpha"
           } >> "$GITHUB_OUTPUT"
           {
-            printf 'main → \`%s\`（最新稳定版）\n\n' "$tag"
-            printf 'alpha-release → \`%s\`（正式/beta/alpha 中最高者）\n\n' "$alpha_tag"
-            if [[ "$same" == true ]]; then
-              printf '两者相同：alpha-release 复用本轮算出的 pin，不再单独轮换哈希。\n'
+            printf 'stable → \`%s\`（最新稳定版）\n\n' "$stable"
+            printf 'alpha → \`%s\`（正式/beta/alpha 中最高者）\n\n' "$alpha"
+            if [[ "$stable" == "$alpha" ]]; then
+              printf '两者相同：只轮换一次哈希，两套 pin 一起写。\n'
             else
-              printf '两者不同：latest 是预发布，main 的升级照走，alpha-release 单独轮换一次。\n'
+              printf '两者不同：latest 是预发布，两套 pin 各轮换一次。\n'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # 阶段一：main。永远按 stable 自己的解析走，不受预发布影响
-      # （否则一个更新的 alpha 会把 stable 的升级整个遮蔽掉，main 停在旧版本上）。
-      # 机器人直接推到 main，不开 PR：验收交给 main 上那次 push 触发的 build.yml。
-      - name: Bump main tag and rotate FOD hashes
-        id: main-bump
+      - name: Rotate pins and hashes
+        id: rotate
         env:
           INPUT_FORCE: ${{ github.event.inputs.force }}
         run: |
           set -euo pipefail
-          args=()
+          args=(--stable '${{ steps.target.outputs.stable }}' --alpha '${{ steps.target.outputs.alpha }}')
           if [[ "$INPUT_FORCE" == "true" ]]; then
             args+=(--force)
           fi
-          python3 scripts/update.py "${args[@]}" '${{ steps.target.outputs.tag }}'
-          # 用 HEAD 而非 index：alpha 那一步会用 git checkout <commit> -- 落 pin，那样改动是已暂存的，
-          # 单纯 git diff（工作区 vs index）会看不见。
+          python3 scripts/update.py "${args[@]}"
           if git diff --quiet HEAD; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "main 已指向 ${{ steps.target.outputs.tag }}，无需升级。" >> "$GITHUB_STEP_SUMMARY"
+            echo "两套 pin 都已是各自目标的最新版本。" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            python3 scripts/update.py --print-pins > pins.json
           fi
 
       - name: Commit and push to main
-        id: main-push
-        if: steps.main-bump.outputs.changed == 'true'
+        if: steps.rotate.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
-          tag="$(jq -r .tag pins.json)"
+          stable='${{ steps.target.outputs.stable }}'
+          alpha='${{ steps.target.outputs.alpha }}'
 
           # commit 归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID），
           # 否则 GitHub 不会把 commit 归属到 <app-slug>[bot]（API 里表现为 login: none）。
           bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
-          git commit -m "siyuan: bump to $tag"
+          git add flake.nix
+          git commit -m "siyuan: stable $stable / alpha $alpha"
           # 直推 main（不开 PR）：必须是 App 令牌，GITHUB_TOKEN 的 push 不会触发 build.yml
           git push origin "HEAD:refs/heads/main"
           {
-            echo "commit=$(git rev-parse HEAD)"
-            echo "tag=$tag"
-          } >> "$GITHUB_OUTPUT"
-          {
-            printf '`main` 直推到 \`%s\`（最新稳定版），验收看本次 push 触发的 `build.yml`。\n\n' "$tag"
-            printf '| FOD | 位置 | 值 |\n'
-            printf '| --- | --- | --- |\n'
-            printf '| `src` | `flake.nix` | `%s` |\n' "$(jq -r .src pins.json)"
-            printf '| `vendorHash` | `pkgs/siyuan-kernel.nix` | `%s` |\n' "$(jq -r .vendorHash pins.json)"
-            printf '| `pnpmDeps` | `pkgs/siyuan-ui.nix` | `%s` |\n\n' "$(jq -r .pnpmDeps pins.json)"
-            printf '`siyuan-kernel-test` 跑红是设计内常态（沙箱缺少 `../../app/*` 资源），不是本次升级的回归。\n'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # 阶段二：alpha-release 滚到 newest。一律以 **main 当前的 tip 为基线重建**：
-      #   - newest == stable：main 的 tip 就是它该有的内容（pin 也是本轮换出来的），直接置为该 commit
-      #   - newest 是预发布：在 main 的基线上单独轮换一次
-      # 为什么不在 alpha-release 自己的旧 tip 上叠加：那样 main 的 workflow / composite action /
-      # 打包修复都流不过来，alpha 自己的 build.yml 会缺文件或用旧代码而红（2026-10 就撞过一次：
-      # 它不含 .github/actions/setup，构建直接找不到 action）。以 main 为基线后它始终包含 main 的全部内容。
-      - name: Roll alpha-release
-        id: alpha
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-          INPUT_FORCE: ${{ github.event.inputs.force }}
-        run: |
-          set -euo pipefail
-          alpha_tag='${{ steps.target.outputs.alpha_tag }}'
-          # main 本轮结束后的 tip（没升级就是本轮开始时那个）
-          main_commit='${{ steps.main-push.outputs.commit }}'
-          if [[ -z "$main_commit" ]]; then
-            main_commit='${{ steps.target.outputs.base }}'
-          fi
-
-          git fetch --depth=1 origin "+refs/heads/alpha-release:refs/remotes/origin/alpha-release"
-          old_tip="$(git rev-parse "origin/alpha-release")"
-          git checkout -B alpha-release "$main_commit"
-
-          mode=push
-          if [[ '${{ steps.target.outputs.same }}' == "true" ]]; then
-            # 已经是 main 那个 commit 就别动；否则置为它——比 commit 而非 tree：
-            # 「内容相同但 SHA 不同」正是要消掉的重复，比 tree 会让它永远对齐不过来
-            if [[ "$old_tip" == "$main_commit" ]]; then
-              mode=skip
-            fi
-          else
-            args=()
-            if [[ "$INPUT_FORCE" == "true" ]]; then
-              args+=(--force)
-            fi
-            python3 scripts/update.py "${args[@]}" "$alpha_tag"
-            mode=commit
-          fi
-
-          if [[ "$mode" == "commit" ]]; then
-            if git diff --quiet HEAD; then
-              mode=skip
-            else
-              # commit 作者归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID）
-              bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
-              git config user.name "${APP_SLUG}[bot]"
-              git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-              git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
-              git commit -m "siyuan: bump to $(python3 scripts/update.py --print-pins | jq -r .tag)"
-              # 内容与旧 tip 相同就别推，免得每天制造一个空转的 commit
-              if [[ "$(git rev-parse "HEAD^{tree}")" == "$(git rev-parse "$old_tip^{tree}")" ]]; then
-                mode=skip
-              fi
-            fi
-          fi
-
-          if [[ "$mode" == "skip" ]]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "alpha-release 已指向 \`$alpha_tag\`。" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          # 该分支归自动化所有，force 覆盖以保持幂等
-          git push --force origin "HEAD:refs/heads/alpha-release"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          {
-            printf '滚动更新 `alpha-release` 到 \`%s\`。\n\n' "$alpha_tag"
-            case "$mode" in
-              push) printf 'newest == stable：该分支已置为 `main` 当前的 commit（未单独轮换哈希）。\n' ;;
-              commit) printf 'newest 是预发布：在 `main` 的基线上由 `scripts/update.py` 轮换一次。\n' ;;
-            esac
-            printf '本分支不会自动合并到 `main`——`main` 只追稳定版。\n'
-            printf '验收以本分支上的 `build.yml` 为准：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿。\n'
+            printf '直推 `main`：stable \`%s\`、alpha \`%s\`。\n\n' "$stable" "$alpha"
+            printf '验收看本次 push 触发的 `build.yml`：稳定版两套包把关，抢先版只记录不把关。\n'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""升级 SiYuan 版本并轮换三个固定输出推导（FOD）的哈希。
+"""升级 SiYuan 版本并轮换固定输出推导（FOD）的哈希。
+
+本仓库在 main 一个分支上维护两套 pin（见 flake.nix）：
+    stable → 最新正式版（vX.Y.Z）                 : siyuan-server / siyuan-client
+    alpha  → 正式/beta/alpha 中版本最高者          : siyuan-server-alpha / siyuan-client-alpha
+每套各 4 个值（tag + src/vendorHash/pnpmDeps），共 8 个 pin，全部写在 flake.nix 里。
 
 用法:
-    scripts/update.py                # 升到上游最新稳定版（忽略 -alpha/-beta 等预发布）
-    scripts/update.py --channel=any  # 升到正式/beta/alpha 中版本最高者（alpha-release 分支用）
-    scripts/update.py v3.9.0         # 升到指定 tag
-    scripts/update.py --force        # tag 未变也重算哈希（改了影响 FOD 内容的东西后要用）
-    scripts/update.py --build        # 升级后再冒烟构建 siyuan-server
-    scripts/update.py --print-pins   # 以 JSON 打印当前 pin 的 tag 与三个哈希后退出
-    scripts/update.py --print-latest # 按 --channel 打印上游最新 tag 后退出（只查 remote，不改文件）
+    scripts/update.py                    # 两套 pin 各按自己的目标升级并轮换哈希
+    scripts/update.py --stable v3.9.0    # 指定稳定版目标（alpha 仍自动解析）
+    scripts/update.py --alpha v3.8.8-alpha.1   # 指定抢先版目标
+    scripts/update.py --force            # tag 未变也重算哈希（改了影响 FOD 内容的东西后要用）
+    scripts/update.py --build            # 升级后再冒烟构建两套包
+    scripts/update.py --print-pins       # 以 JSON 打印 8 个 pin 后退出
+    scripts/update.py --print-targets    # 以 JSON 打印两个目标 tag 后退出（只查 remote）
 
-三个 FOD 及其哈希位置:
-    src            flake.nix              fetchFromGitHub.hash
-    vendorHash     pkgs/siyuan-kernel.nix buildGoModule.vendorHash
-    pnpmDeps       pkgs/siyuan-ui.nix     fetchPnpmDeps.hash
+两个目标 tag 相同时（最新 release 恰好是正式版）只轮换一次，两套 pin 一起写——
+同一个 tag 的两个 FOD 推导内容相同，哈希必然相同，没必要构建两遍。
 
 为什么先写占位哈希：FOD 的 store 路径只由「name + 声明的哈希」决定，与构建脚本无关。
 内容变了却沿用旧哈希时，新推导会与旧产物算出同一路径，Nix 直接跳过构建——依赖不更新、
@@ -36,7 +39,7 @@ UPSTREAM_TARBALL = "https://github.com/siyuan-note/siyuan/archive/{tag}.tar.gz"
 
 # 只认 vX.Y.Z：上游会先发 -alpha/-beta，且存在 v202205311650-dev 这类非版本 tag。
 STABLE_TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
-# --channel=any：正式版之外的预发布目前只有 -alpha.N / -beta.N 两种（后缀可选）。
+# 抢先版的目标：正式版与 -alpha.N / -beta.N 一起比（后缀可选）。
 FULL_TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)\.(\d+))?")
 
 # 同一版本号内 alpha < beta < 正式，保证 v3.8.7-alpha.1 > v3.8.6 且 v3.8.6-beta.2 < v3.8.6。
@@ -64,29 +67,56 @@ class Pin:
     pattern: re.Pattern[str]
 
 
-# 正则锚定到语义块而非缩进：写死缩进曾导致 sed 静默不匹配、哈希未被重置（2026-09）。
-TAG = Pin("tag", "flake.nix", re.compile(r'^[ \t]*tag = "(?P<value>[^"]+)";', re.M))
-SRC = Pin(
-    "src",
-    "flake.nix",
-    re.compile(r'(fetchFromGitHub\s*\{[^{}]*?hash = ")(?P<value>[^"]+)(")', re.S),
-)
-VENDOR = Pin(
-    "vendorHash",
-    "pkgs/siyuan-kernel.nix",
-    re.compile(r'^[ \t]*vendorHash = "(?P<value>[^"]+)";', re.M),
-)
-PNPM = Pin(
-    "pnpmDeps",
-    "pkgs/siyuan-ui.nix",
-    re.compile(r'(fetchPnpmDeps\s*\{[^{}]*?hash = ")(?P<value>[^"]+)(")', re.S),
-)
+def _pin(label: str) -> Pin:
+    """flake.nix 里的 `stableXxx = "...";` / `alphaXxx = "...";`。
 
-# 解析顺序：src 必须先落实，另两个 FOD 都依赖它。
-FOD_PINS = (
-    (VENDOR, ".#siyuan-server.passthru.kernel.goModules"),
-    (PNPM, ".#siyuan-server.passthru.ui.pnpmDeps"),
+    名字唯一，故正则天然只会匹配一处；仍由 _match_one 强制断言「恰好 1 处」，
+    绝不静默跳过（写死缩进的 sed 曾导致哈希未被重置，2026-09）。
+    """
+    return Pin(label, "flake.nix", re.compile(rf'^[ \t]*{label} = "(?P<value>[^"]+)";', re.M))
+
+
+@dataclass(frozen=True)
+class Variant:
+    """一套 pin：它自己的 tag、三个 FOD 哈希，以及对应的预取推导。"""
+
+    name: str
+    tag: Pin
+    src: Pin
+    vendor: Pin
+    pnpm: Pin
+
+    @property
+    def suffix(self) -> str:
+        return "" if self.name == "stable" else "-alpha"
+
+    @property
+    def hashes(self) -> tuple[Pin, Pin, Pin]:
+        return self.src, self.vendor, self.pnpm
+
+    @property
+    def fod_installables(self) -> tuple[str, str]:
+        return (
+            f".#siyuan-server{self.suffix}.passthru.kernel.goModules",
+            f".#siyuan-server{self.suffix}.passthru.ui.pnpmDeps",
+        )
+
+
+STABLE = Variant(
+    "stable",
+    tag=_pin("stableTag"),
+    src=_pin("stableSrc"),
+    vendor=_pin("stableVendorHash"),
+    pnpm=_pin("stablePnpmDeps"),
 )
+ALPHA = Variant(
+    "alpha",
+    tag=_pin("alphaTag"),
+    src=_pin("alphaSrc"),
+    vendor=_pin("alphaVendorHash"),
+    pnpm=_pin("alphaPnpmDeps"),
+)
+VARIANTS = (STABLE, ALPHA)
 
 
 def run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -127,24 +157,19 @@ def version_key(tag: str) -> tuple[int, int, int, int, int]:
     return int(major), int(minor), int(patch), rank, int(num or 0)
 
 
-def latest_tag(repo: Path, channel: str) -> str:
-    """channel=stable 只认 vX.Y.Z；channel=any 把 -alpha.N/-beta.N 也纳入比较。"""
+def resolve_targets(repo: Path) -> tuple[str, str]:
+    """一次 ls-remote 解析两个目标：最新正式版、正式/beta/alpha 中最高者。"""
     proc = run(["git", "ls-remote", "--tags", "--refs", UPSTREAM_REPO], cwd=repo)
     if proc.returncode != 0:
         raise UpdateError(f"git ls-remote 失败:\n{proc.stderr.strip()}")
-    pattern = STABLE_TAG_RE if channel == "stable" else FULL_TAG_RE
-    tags = [
-        ref
-        for line in proc.stdout.splitlines()
-        if (ref := line.partition("refs/tags/")[2]) and pattern.fullmatch(ref)
-    ]
-    if not tags:
-        raise UpdateError(
-            "上游未找到任何 vX.Y.Z 稳定 tag"
-            if channel == "stable"
-            else "上游未找到任何 vX.Y.Z[-(alpha|beta).N] tag"
-        )
-    return max(tags, key=version_key)
+    tags = [line.partition("refs/tags/")[2] for line in proc.stdout.splitlines()]
+    stable = [t for t in tags if STABLE_TAG_RE.fullmatch(t)]
+    newest = [t for t in tags if FULL_TAG_RE.fullmatch(t)]
+    if not stable:
+        raise UpdateError("上游未找到任何 vX.Y.Z 稳定 tag")
+    if not newest:
+        raise UpdateError("上游未找到任何 vX.Y.Z[-(alpha|beta).N] tag")
+    return max(stable, key=version_key), max(newest, key=version_key)
 
 
 def resolve_src(repo: Path, tag: str) -> str:
@@ -177,48 +202,80 @@ def resolve_fod(repo: Path, installable: str) -> str:
     raise UpdateError(f"无法从 `nix build {installable}` 的输出中提取哈希，日志尾部:\n{tail}")
 
 
+def rotate(repo: Path, variant: Variant, tag: str) -> dict[str, str]:
+    """把一套 pin 轮换到 tag：先落 tag + 占位哈希，再依次解析 src 与两个 FOD。"""
+    print(f"{variant.name}: -> {tag}")
+    write_pin(repo, variant.tag, tag)
+    for pin in variant.hashes:
+        write_pin(repo, pin, PLACEHOLDER)
+
+    values = {"src": resolve_src(repo, tag)}
+    write_pin(repo, variant.src, values["src"])
+    # 解析顺序：src 必须先落实，另两个 FOD 都依赖它。
+    for pin, installable in zip(variant.hashes[1:], variant.fod_installables, strict=True):
+        values[pin.label] = resolve_fod(repo, installable)
+        write_pin(repo, pin, values[pin.label])
+    return values
+
+
+def apply_values(repo: Path, variant: Variant, tag: str, values: dict[str, str]) -> None:
+    """把另一套 pin 直接写成同一份结果（目标 tag 相同时省掉一次 FOD 构建）。"""
+    print(f"{variant.name}: -> {tag}（复用上一套的哈希）")
+    write_pin(repo, variant.tag, tag)
+    for pin in variant.hashes:
+        write_pin(repo, pin, values[pin.label])
+
+
 def current_pins(repo: Path) -> dict[str, str]:
-    return {
-        "tag": read_pin(repo, TAG),
-        "src": read_pin(repo, SRC),
-        "vendorHash": read_pin(repo, VENDOR),
-        "pnpmDeps": read_pin(repo, PNPM),
-    }
+    return {pin.label: read_pin(repo, pin) for variant in VARIANTS for pin in (variant.tag, *variant.hashes)}
 
 
-def update(repo: Path, tag: str | None, *, channel: str, force: bool, build: bool) -> int:
-    current = read_pin(repo, TAG)
-    tag = tag or latest_tag(repo, channel)
-    version_key(tag)  # 校验格式
-    if tag == current and not force:
-        print(f"已是最新: {tag}")
-        return 0
+def update(
+    repo: Path,
+    stable: str | None,
+    alpha: str | None,
+    *,
+    force: bool,
+    build: bool,
+) -> int:
+    current = {v.name: read_pin(repo, v.tag) for v in VARIANTS}
+    if stable is None or alpha is None:
+        resolved_stable, resolved_alpha = resolve_targets(repo)
+        stable = stable or resolved_stable
+        alpha = alpha or resolved_alpha
+    version_key(stable)  # 校验格式
+    version_key(alpha)
 
-    print(f"升级 {current} -> {tag}")
+    print(f"目标: stable={stable} alpha={alpha}（当前: stable={current['stable']} alpha={current['alpha']}）")
 
-    # 任一步失败都回滚四个 pin，避免仓库停在「一半占位、一半真实」的状态。
-    pins = (TAG, SRC, VENDOR, PNPM)
-    originals = {pin.relpath: (repo / pin.relpath).read_bytes() for pin in pins}
+    # 任一步失败都回滚 flake.nix：8 个 pin 全在这一个文件里，回滚就是一次字节还原。
+    original = (repo / "flake.nix").read_bytes()
     try:
-        write_pin(repo, TAG, tag)
-        for pin in (SRC, VENDOR, PNPM):
-            write_pin(repo, pin, PLACEHOLDER)
-
-        write_pin(repo, SRC, resolve_src(repo, tag))
-        for pin, installable in FOD_PINS:
-            write_pin(repo, pin, resolve_fod(repo, installable))
+        if stable == alpha:
+            # 最新 release 恰好是正式版：一套轮换，两套共用（tag 同 ⇒ 哈希同）
+            if stable == current["stable"] and alpha == current["alpha"] and not force:
+                print(f"两套 pin 都已是最新: {stable}")
+                return 0
+            values = rotate(repo, STABLE, stable)
+            apply_values(repo, ALPHA, alpha, values)
+        else:
+            for variant, tag in ((STABLE, stable), (ALPHA, alpha)):
+                if tag == current[variant.name] and not force:
+                    print(f"{variant.name}: 已是最新 {tag}")
+                    continue
+                rotate(repo, variant, tag)
 
         if build:
-            proc = run(["nix", "build", "-L", ".#siyuan-server"], cwd=repo)
-            if proc.returncode != 0:
-                raise UpdateError("siyuan-server 冒烟构建失败")
+            for installable in (".#siyuan-server", ".#siyuan-server-alpha"):
+                proc = run(["nix", "build", "-L", installable], cwd=repo)
+                if proc.returncode != 0:
+                    raise UpdateError(f"{installable} 冒烟构建失败")
     except BaseException:
-        for relpath, data in originals.items():
-            (repo / relpath).write_bytes(data)
+        (repo / "flake.nix").write_bytes(original)
         raise
 
-    for pin in pins:
-        print(f"{pin.label:11} {read_pin(repo, pin)}")
+    for pin_label, value in current_pins(repo).items():
+        print(f"{pin_label:17} {value}")
     return 0
 
 
@@ -228,24 +285,19 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("tag", nargs="?", help="目标 tag（默认取上游最新稳定版）")
-    parser.add_argument(
-        "--channel",
-        choices=("stable", "any"),
-        default="stable",
-        help="选哪个 tag：stable=只认正式版（默认），any=正式/beta/alpha 中版本最高者",
-    )
+    parser.add_argument("--stable", metavar="TAG", help="稳定版的目标 tag（默认自动解析）")
+    parser.add_argument("--alpha", metavar="TAG", help="抢先版的目标 tag（默认自动解析）")
     parser.add_argument("--force", action="store_true", help="tag 未变也重算哈希")
-    parser.add_argument("--build", action="store_true", help="升级后冒烟构建 siyuan-server")
+    parser.add_argument("--build", action="store_true", help="升级后冒烟构建两套服务端包")
     parser.add_argument(
         "--print-pins",
         action="store_true",
-        help="以 JSON 打印当前 pin 的 tag 与三个哈希后退出",
+        help="以 JSON 打印 8 个 pin 后退出",
     )
     parser.add_argument(
-        "--print-latest",
+        "--print-targets",
         action="store_true",
-        help="按 --channel 打印上游最新 tag 后退出（只查 remote，不改文件）",
+        help="以 JSON 打印两个目标 tag（stable / alpha）后退出（只查 remote，不改文件）",
     )
     parser.add_argument(
         "--repo",
@@ -257,13 +309,14 @@ def main(argv: list[str] | None = None) -> int:
     repo = args.repo.resolve()
 
     try:
-        if args.print_latest:
-            print(latest_tag(repo, args.channel))
-            return 0
         if args.print_pins:
             print(json.dumps(current_pins(repo), ensure_ascii=False))
             return 0
-        return update(repo, args.tag, channel=args.channel, force=args.force, build=args.build)
+        if args.print_targets:
+            stable, alpha = resolve_targets(repo)
+            print(json.dumps({"stable": stable, "alpha": alpha}, ensure_ascii=False))
+            return 0
+        return update(repo, args.stable, args.alpha, force=args.force, build=args.build)
     except UpdateError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
