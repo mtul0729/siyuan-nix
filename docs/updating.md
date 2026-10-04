@@ -3,61 +3,50 @@
 ## 标准流程
 
 ```bash
-./scripts/update.py              # 升到上游最新稳定版；也可传显式 tag，如 v3.9.0
-./scripts/update.py --channel=any # 升到正式/beta/alpha 中版本最高者（alpha-release 分支用）
-./scripts/update.py --force      # tag 未变也重算哈希（改了影响 FOD 内容的东西后要用）
-./scripts/update.py --build      # 升级后再冒烟构建 siyuan-server
-./scripts/update.py --print-pins # 以 JSON 打印当前 pin 的 tag 与三个哈希
+./scripts/update.py                    # 两套 pin 各按自己的目标升级 + 轮换 FOD 哈希
+./scripts/update.py --stable v3.9.0    # 只显式指定 stable 的目标（alpha 仍自动解析）
+./scripts/update.py --alpha v3.8.8-alpha.1   # 只显式指定 alpha 的目标
+./scripts/update.py --force            # tag 未变也重算哈希（改了影响 FOD 内容的东西后要用）
+./scripts/update.py --build            # 升级后再冒烟构建两套服务端包
+./scripts/update.py --print-pins       # 以 JSON 打印 8 个 pin
+./scripts/update.py --print-targets    # 以 JSON 打印两个目标 tag（只查 remote）
 ```
 
-`scripts/update.py`（Python 3，仅标准库）一步完成「升 tag + 轮换三个 FOD 哈希」：先把 tag 与三个哈希写成占位符，再解析出真值写回。任何一步失败都会把四个 pin 回滚到原状，不会留下「一半占位、一半真实」的仓库。哈希无法离线预计算，所以需要联网 + nix。
+`scripts/update.py`（Python 3，仅标准库）一步完成「升 tag + 轮换 FOD 哈希」：先把该套 pin 的 tag 与三个哈希写成占位符，再解析出真值写回。任何一步失败都会把 `flake.nix` 按字节还原，不会留下「一半占位、一半真实」的仓库。哈希无法离线预计算，所以需要联网 + nix。
 
-`--channel` 决定「最新」的含义（`version_key` 据此排序）：
+**两套 pin，两个目标**（都在 `flake.nix` 里，各 4 个值：tag + src/vendorHash/pnpmDeps）：
 
-| channel | 认哪些 tag | 用于 |
+| variant | 目标 | 认哪些 tag | 喂哪些包 |
+| --- | --- | --- | --- |
+| `stable` | 最新稳定版 | `vX.Y.Z` | `siyuan-server` / `siyuan-client` |
+| `alpha` | 正式/beta/alpha 中最高者 | `vX.Y.Z` 与 `vX.Y.Z-alpha.N` / `vX.Y.Z-beta.N` | `siyuan-server-alpha` / `siyuan-client-alpha` |
+
+同一版本号内 alpha < beta < 正式，故 `v3.8.7-alpha.1 > v3.8.6 > v3.8.6-beta.2`；`v202205311650-dev` 这类非版本 tag 两套都不认。两个目标 tag 相同时（最新 release 恰好是正式版）**只轮换一次**，结果同时写进两套 pin——同 tag ⇒ FOD 内容相同 ⇒ 哈希必然相同。
+
+每套三个哈希的解析方式：
+
+| FOD | pin 名 | 解析方式 |
 | --- | --- | --- |
-| `stable`（默认） | `vX.Y.Z` | `main` |
-| `any` | `vX.Y.Z` 与 `vX.Y.Z-alpha.N` / `vX.Y.Z-beta.N` | `alpha-release` |
+| `src` | `stableSrc` / `alphaSrc` | `nix-prefetch-url --unpack`（已核对等价于 `fetchFromGitHub`） |
+| `vendorHash` | `stableVendorHash` / `alphaVendorHash` | 占位哈希触发构建，从 `hash mismatch ... got:` 取真值 |
+| `pnpmDeps` | `stablePnpmDeps` / `alphaPnpmDeps` | 同上 |
 
-同一版本号内 alpha < beta < 正式，故 `v3.8.7-alpha.1 > v3.8.6 > v3.8.6-beta.2`；`v202205311650-dev` 这类非版本 tag 两个 channel 都不认。
-
-三个哈希的解析方式：
-
-| FOD | 位置 | 解析方式 |
-| --- | --- | --- |
-| `src` | `flake.nix`（`fetchFromGitHub.hash`） | `nix-prefetch-url --unpack`（已核对等价于 `fetchFromGitHub`） |
-| `vendorHash` | `pkgs/siyuan-kernel.nix` | 占位哈希触发构建，从 `hash mismatch ... got:` 取真值 |
-| `pnpmDeps` | `pkgs/siyuan-ui.nix` | 同上 |
-
-正则锚定到语义块（`fetchFromGitHub { ... hash = ... }`、`vendorHash`、`fetchPnpmDeps { ... }`）且强制断言恰好匹配 1 处，不匹配就报错——绝不像写死缩进的 `sed` 那样静默跳过。手动迭代时（改完 Push 再推）仍可看 CI 日志里的 `got: sha256-...`，架构无关、两个 matrix 一致。
+哈希不再写死在 `pkgs/*.nix` 里，而是作为参数注入（`siyuan-kernel.nix` 收 `vendorHash`、`siyuan-ui.nix` 收 `pnpmDepsHash`），因此两个版本共用同一份打包逻辑。8 个 pin 名各自唯一，正则（`^[ \t]*<名字> = "..."$;`）天然只匹配一处，`update.py` 仍强制断言「恰好 1 处」——绝不像写死缩进的 `sed` 那样静默跳过。手动迭代时仍可看 CI 日志里的 `got: sha256-...`，架构无关、两个 matrix 一致。
 
 ### 自动升级（GitHub Actions）
 
-`.github/workflows/update.yml` 把上面这套 SOP 自动化，每天北京时间 03:17（= 前一天 19:17 UTC）跑一次（也可 `workflow_dispatch`，可传入 `tag` / `alpha_tag` / `force`）。一次运行解析**两个互相独立**的目标（`git ls-remote` + tag 正则，滤掉 `v202205311650-dev` 这类非版本 tag）：
+`.github/workflows/update.yml` 把上面这套 SOP 自动化，每天北京时间 03:17（= 前一天 19:17 UTC）跑一次（也可 `workflow_dispatch`，可传入 `stable_tag` / `alpha_tag` / `force`）。一次运行解析两个目标，改完 `flake.nix` 后**由 bot 直推 `main`，不开 PR**：
 
-1. `stable`：只认 `vX.Y.Z` 的最新稳定版 → 给 `main` 开 PR（提交到 `auto-update/siyuan-<tag>`，同一 tag 已有开启的 PR 时只跳过开单，分支照建——alpha 那一步要用它上面的 pin），人工点合并。
-2. `newest`：正式/beta/alpha 中版本最高者 → `alpha-release` 滚到它，force-push 直接落盘，不开 PR（上游 alpha 一天能发好几个 `v3.8.6-alpha.1..10`，逐个开 PR 会淹没真正要人看 CI 的 main 升级单）。该分支不合回 `main`。
+1. `stable` → `siyuan-server` / `siyuan-client`。
+2. `alpha` → `siyuan-server-alpha` / `siyuan-client-alpha`。
 
-**必须是两个目标**：若用「最高版本」顺带推出 main 的目标，更新的 alpha 会遮蔽刚发布的正式版——上游正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻 `v3.8.7-alpha.1`），等 `v3.8.7` 发布时窗口里很可能已有 `v3.8.8-alpha.1`，最高版本是那个 alpha，main 永远拿不到 `v3.8.7` 的 PR，停在旧稳定版上。
+**必须是两个目标**：若用「最高版本」顺带推出 stable 的目标，更新的 alpha 会遮蔽刚发布的正式版——上游正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻 `v3.8.7-alpha.1`），等 `v3.8.7` 发布时窗口里很可能已有 `v3.8.8-alpha.1`，最高版本是那个 alpha，stable 那套 pin 就永远拿不到 `v3.8.7`，`siyuan-server` 停在旧稳定版上。
 
-去重只在 `newest == stable`（最新 release 恰好是稳定版）时发生，此时一轮哈希轮换同时喂两个分支：
+真正的跨平台验收是这次 push 触发的 `build.yml`（含 `aarch64-darwin`）：**稳定版两套包把关，抢先版 `continue-on-error` 只记录**（上游预发布自带问题很常见）。推送必须是 App 令牌——`GITHUB_TOKEN` 产生的 push 事件不触发其它 workflow，用它推等于没有 CI。
 
-| 情形 | 在哪个 checkout 上轮换 | `alpha-release` 怎么拿到 pin |
-| --- | --- | --- |
-| `newest == stable` | `main`（一次） | 该分支直接置为 main 的 tip（同 SHA，不重复轮换） |
-| `newest` 是预发布（两者不同） | `main` 升 stable + `alpha-release` 升 newest | 各自轮换，两次都是必需的（tag 不同 ⇒ 哈希不同） |
+> 过去两个变体分别放在 `main` 与 `alpha-release` 两个分支上，已废弃：main 独有的内容（workflow、共用的 composite action、打包修复）流不到另一个分支，它自己的 `build.yml` 会因缺文件或旧代码而红（2026-10 撞过一次：它不含 `.github/actions/setup`，构建直接找不到 action）。合成一个分支、用包名区分之后，这类故障在结构上不可能再发生，也不需要 force-push 任何分支。
 
-`alpha-release` 一律**以 main 当前的 tip 为基线重建**，不在它自己的旧 tip 上叠加 commit：否则 main 独有的内容（workflow、共用的 composite action、打包修复）流不过去，它自己的 `build.yml` 就会因为缺文件或旧代码而红——2026-10 撞过一次（它不含 `.github/actions/setup`，构建直接找不到 action）。以 main 为基线后，alpha 恒等于「main + pin」。重建后若 tree 与旧 tip 相同则不推送，避免每天制造空转的 commit。
-
-方向只能是 main → alpha：`main` 是 `flake.nix` 内容（内核接线、NixOS 模块）的权威来源，`alpha-release` 只是在其上叠了 pin 的滚动分支，反过来会把 main 的改动悄悄回退掉。
-
-「main 已在该 tag」那一行里，只有分支 tip **已经是 main 的那个 commit** 时才跳过（不 push、不触发 CI）——比的是 **commit 而非 tree**：「tree 相同但 SHA 不同」正是要消掉的重复，比 tree 会让它永远对齐不过来。
-
-剩下的 CI 重复不用管——tag + 哈希一致 ⇒ 推导 store path 一致 ⇒ 第二次构建是 cachix 命中，push 已存在的路径是 no-op。
-
-真正的跨平台验收仍是 `build.yml`：main 侧在该 PR 上运行（含 `aarch64-darwin`），人工点合并；alpha 侧在该分支的 push 上运行。alpha-release 那一步还有三个不能动的点：checkout 必须是 `alpha-release` 本身（否则把 main 的 pin 当基准，可能回退到旧正式版）；推送必须用 App 令牌（`GITHUB_TOKEN` 产生的 push 事件不触发其它 workflow）；该分支不合回 `main`。
-
-**身份与秘钥**：workflow 用 GitHub App 令牌而非 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不触发其它 workflow，那样 PR 上的 `build.yml` 会停在 `action_required` 需人工批准。因此需一个 GitHub App（repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`；权限只给 `Contents: Read and write` 与 `Pull requests: Read and write`），这样 PR 作者是 `<app>[bot]`、其 `pull_request` 事件能自动触发 CI。一次性创建步骤见 README 的“自动升级”一节；私钥丢失/轮换时重建后更新这两个值即可。
+**身份与秘钥**：workflow 用 GitHub App 令牌而非 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不触发其它 workflow，那样直推上去的 commit 不会触发 `build.yml`，验收信号就没了。因此需一个 GitHub App（repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`；权限只给 `Contents: Read and write` 与 `Pull requests: Read and write`）。一次性创建步骤见 README 的“自动升级”一节；私钥丢失/轮换时重建后更新这两个值即可。
 
 > 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
 > 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。

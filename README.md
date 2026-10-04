@@ -41,79 +41,71 @@ nix build github:mtul0729/siyuan-nix                 # 默认输出：Linux 上�
 nix profile install github:mtul0729/siyuan-nix#siyuan-client
 ```
 
+### 抢先版（正式 / beta / alpha 中版本最高者）
+
+同一套 flake 里另有 `-alpha` 后缀的包，追「正式/beta/alpha 中版本最高的那个 release」（`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`），可能是预发布：
+
+```bash
+nix build github:mtul0729/siyuan-nix#siyuan-client-alpha
+nix build github:mtul0729/siyuan-nix#siyuan-server-alpha      # 仅 Linux
+```
+
+NixOS 模块默认用稳定版；要试用抢先版就换 package：
+
+```nix
+services.siyuan.package = siyuan-nix.packages.${pkgs.system}.siyuan-server-alpha;
+```
+
 ## 常用命令
 
 ```bash
 nix build -L .#siyuan-server                        # 服务端包（仅 Linux）
+nix build -L .#siyuan-server-alpha                  # 抢先版服务端包（仅 Linux）
 nix build -L .#siyuan-client                        # 桌面客户端（linux / aarch64-darwin）
+nix build -L .#siyuan-client-alpha                  # 抢先版桌面客户端
 nix build -L .#checks.x86_64-linux.siyuan-kernel-test    # 内核 go 测试（独立于主构建）
 nix flake check --no-build --all-systems            # 三系统纯求值校验
-./scripts/update.py [vX.Y.Z]                         # 升级 tag + 轮换三个 FOD 哈希（详见脚本头注释）
-./scripts/update.py --channel=any                    # 同上，但追正式/beta/alpha 中版本最高者
-./scripts/update.py --print-pins                     # 打印当前 pin 的 tag/哈希（JSON）
+./scripts/update.py                                 # 两套 pin 各按目标升级 + 轮换 FOD 哈希
+./scripts/update.py --print-targets                 # 打印两个目标 tag（JSON）
+./scripts/update.py --print-pins                    # 打印 8 个 pin（JSON）
 ```
 
 ## 分支
 
-| 分支 | 跟踪 | 说明 |
-| --- | --- | --- |
-| `main` | 最新**正式版** | 稳定，由自动 PR 升级（人工合并） |
-| `alpha-release` | 正式 / beta / alpha 中版本最高者 | 预发布滚动分支，自动 force-push，供提前试用 |
-| `dev` | — | 开发分支 |
-
-想用预发布就把 flake 输入的 ref 指过去：
-
-```nix
-inputs.siyuan-nix.url = "github:mtul0729/siyuan-nix/alpha-release";
-```
-
-```bash
-nix build github:mtul0729/siyuan-nix/alpha-release#siyuan-client
-```
+| 分支 | 说明 |
+| --- | --- |
+| `main` | 唯一发布分支：稳定版与抢先版两套 pin 都在这里 |
+| `dev` | 开发分支 |
 
 ## 自动升级
 
-`.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）跑一次，**一条流水线解析两个互相独立的目标，都由 bot 直推到对应分支（不开 PR）**：
+`.github/workflows/update.yml` 每天北京时间 03:17（= 前一天 19:17 UTC）跑一次，**在 main 上解析两个互相独立的目标，轮换 pin 后由 bot 直推（不开 PR）**：
 
-- `main` → 最新**稳定版**（只认 `vX.Y.Z`），跑 `scripts/update.py` 轮换三个 FOD 哈希后直推 `main`。
-- `alpha-release` → 正式/beta/alpha 中版本最高者（`v3.8.7-alpha.1` > `v3.8.6` > `v3.8.6-beta.2`），force-push 直推（上游 alpha 一天能发好几个）。该分支不会合回 `main`。
+- `stable` → 最新**稳定版**（只认 `vX.Y.Z`），喂 `siyuan-server` / `siyuan-client`。
+- `alpha` → 正式/beta/alpha 中版本最高者，喂 `siyuan-server-alpha` / `siyuan-client-alpha`。
 
-验收信号就是两个分支各自 push 触发的 `build.yml`（三平台构建 + 内核测试）；红了 `git revert` 即可，没有人工闸门。
+两者必须是独立的目标：上游习惯正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻有 `v3.8.7-alpha.1`），若只解析一个「最高版本」，`v3.8.7` 发布时窗口里可能已有 `v3.8.8-alpha.1`，stable 那套 pin 就永远拿不到 `v3.8.7`。
 
-**为什么不能只解析一个「最高版本」**：上游习惯正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻有 `v3.8.7-alpha.1`），于是 `v3.8.7` 正式发布时窗口里很可能已有 `v3.8.8-alpha.1`——最高版本是那个 alpha，main 就永远拿不到 `v3.8.7` 的 PR，停在旧稳定版上。stable 的解析必须独立于预发布。
+验收信号是这次 push 触发的 `build.yml`：**稳定版两套包把关，抢先版只记录不把关**（上游预发布自带问题很常见，例如 `v3.8.7-alpha.3` 的 darwin 客户端 `spawn python3 ENOENT`）；红了 `git revert` 即可。
 
-去重只在两者重合时（最新 release 恰好是稳定版）：那一轮哈希轮换只做一次，`alpha-release` 要么取 main 刚算出的 pin，要么（main 已在该 tag）直接置为 main 的 commit。最新是预发布时两者本就不同，alpha 单独轮换一次，那是必需的而非重复。
+**为什么不能只解析一个「最高版本」**：上游习惯正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻有 `v3.8.7-alpha.1`），于是 `v3.8.7` 正式发布时窗口里很可能已有 `v3.8.8-alpha.1`——最高版本是那个 alpha，stable 那套 pin 就永远拿不到 `v3.8.7`。stable 的解析必须独立于预发布。
+
+去重发生在两者重合时（最新 release 恰好是正式版）：那一轮哈希轮换只做一次，两套 pin 一起写。最新是预发布时两者本就不同，各轮换一次，那是必需的而非重复。
 
 ## nixpkgs（flake.lock）
 
-`.github/workflows/flake-update.yml` 每周一北京时间 03:03 跑一次 `nix flake update`，先在本机做 `nix flake check --no-build` + 两个包的 x86_64-linux 构建当闸门，通过后由 bot 直推 `main`，并只把 `flake.lock` 同步到 `alpha-release`（不动后者的 tag/哈希——它可能停在预发布上）。推送后再盯两个分支各自触发的 `build.yml` 全矩阵，红了自动开/更新 issue。
+`.github/workflows/flake-update.yml` 每周一北京时间 03:03 跑一次 `nix flake update`，先在本机做 `nix flake check --no-build` + 两套包的 x86_64-linux 构建当闸门，通过后由 bot 直推 `main`，再盯这次 push 触发的 `build.yml` 全矩阵，红了自动开/更新 issue。只涉及 main 一个分支（两套 pin 同在一个 flake.nix 里，不存在 lock 落后的问题）。
 
 三个 workflow 共用 `.github/actions/setup` 这一个 composite action（装 Nix + cachix daemon，`CACHIX_AUTH_TOKEN` 为空时跳过推送）。
 
 手动触发：
 
 ```bash
-gh workflow run update.yml                             # 自动解析
-gh workflow run update.yml -f tag=v3.9.0               # main 指定稳定版
-gh workflow run update.yml -f alpha_tag=v3.8.7-alpha.1 # alpha-release 指定预发布
-gh workflow run update.yml -f force=true               # tag 未变也重算哈希
-gh workflow run flake-update.yml                       # 追 nixpkgs
-```
-
-### flake.lock 自动更新
-
-`.github/workflows/flake-update.yml` 每周北京时间 03:03（= 周日 19:03 UTC）跑一次 `nix flake update`（与版本升级正交：只动 `flake.lock`，不碰 tag 与 FOD 哈希）。它不走 PR：
-
-- lock 没变 → 结束；
-- lock 有变 → 先在 x86_64-linux 上 `nix flake check` + `nix build` 两个包，**通过就直接推上 main**（App 令牌的 push 会自动触发 `build.yml` 做全矩阵复核），**失败则开 issue 通知**，lock 不合入；
-- 合入后的全矩阵（含 aarch64-linux / aarch64-darwin，本机 runner 编不了 darwin，只能在这里验证）红了同样自动开 issue。
-
-aarch64-darwin 不在合入前拦截是刻意的：ubuntu runner 编不了它，只能靠合入后的全矩阵 + issue 兜底。另外 `alpha-release` 的 `flake.lock` 不由本 workflow 碰：`update.yml` 每次运行都会把 main 的 lock 同步到该分支（每天一次，最多滞后一天），alpha 上不做 nixpkgs 升级的决策。
-
-手动触发：
-
-```bash
-gh workflow run flake-update.yml
+gh workflow run update.yml                                    # 两套 pin 自动解析
+gh workflow run update.yml -f stable_tag=v3.9.0               # 指定 stable 目标
+gh workflow run update.yml -f alpha_tag=v3.8.8-alpha.1        # 指定 alpha 目标
+gh workflow run update.yml -f force=true                      # tag 未变也重算哈希
+gh workflow run flake-update.yml                              # 追 nixpkgs
 ```
 
 ### 一次性设置：GitHub App

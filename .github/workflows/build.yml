@@ -2,8 +2,7 @@ name: Build and Push to Cachix
 
 on:
   push:
-    # alpha-release 是滚动跟踪上游预发布的自动分支，同样要给出红绿并推 cachix
-    branches: [main, alpha-release]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -32,6 +31,7 @@ jobs:
         with:
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
+      # 稳定版两套包把关：它们红了 main 就是红的
       - name: Build siyuan-client
         run: nix build -L .#siyuan-client
 
@@ -39,6 +39,18 @@ jobs:
       - name: Build siyuan-server
         if: matrix.server
         run: nix build -L .#siyuan-server
+
+      # 抢先版（正式/beta/alpha 中最高者，可能是预发布）只记录不把关：
+      # 上游预发布本身就经常自带问题（例如 v3.8.7-alpha.3 的 darwin 客户端
+      # `spawn python3 ENOENT`），不能让它决定 main 的红绿；结论留在这一步的日志里。
+      - name: Build siyuan-client-alpha (informational)
+        continue-on-error: true
+        run: nix build -L .#siyuan-client-alpha
+
+      - name: Build siyuan-server-alpha (informational)
+        if: matrix.server
+        continue-on-error: true
+        run: nix build -L .#siyuan-server-alpha
 
       # 本推导在沙箱里必然失败（见 AGENTS.md：它专为“一次性暴露全部失败包”而存在），
       # 不能让它决定 run 的红绿，否则「CI 绿」这个信号等同于失效。失败结果仍留在该 step 的
@@ -55,3 +67,5 @@ jobs:
         run: |
           nix build -L .#siyuan-server.passthru.kernel.goModules
           nix build -L .#siyuan-server.passthru.ui.pnpmDeps
+          nix build -L .#siyuan-server-alpha.passthru.kernel.goModules
+          nix build -L .#siyuan-server-alpha.passthru.ui.pnpmDeps

@@ -11,6 +11,8 @@
   fetchPnpmDeps,
   version,
   src,
+  # pnpm 依赖的 FOD 哈希：由 flake.nix 的 pin 注入（稳定版与抢先版各一份）
+  pnpmDepsHash,
 }:
 
 let
@@ -21,7 +23,7 @@ let
     src = src + "/app";
     # pnpm 11 的依赖存储格式对应 fetcherVersion = 4（含 SQLite 状态库的可复现转储）
     fetcherVersion = 4;
-    hash = "sha256-E46qhUps5zstSP9xfEWOsg6qWWckbxzWvKZivgSFKik=";
+    hash = pnpmDepsHash;
   };
 in
 stdenv.mkDerivation {
