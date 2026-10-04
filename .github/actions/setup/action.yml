@@ -1,8 +1,8 @@
 name: Set up Nix build environment
 description: Installs Nix and configures the mtul cachix cache; every built
-  store path is pushed automatically via cachix's post-build hook
-  (build-time deps included) and nix reads from the cache directly — no
-  explicit push step anywhere.
+  store path is pushed automatically (cachix daemon/post-build hook, including
+  build-time deps) and nix reads from the cache directly — no explicit push
+  step anywhere.
 inputs:
   cachix-auth-token:
     description: CACHIX auth token; cache push is skipped when empty.
@@ -21,8 +21,7 @@ runs:
       with:
         name: mtul
         authToken: ${{ inputs.cachix-auth-token }}
-        # 直接把 mtul.cachix.org 作为 substituter：nix 直接拉缓存，读命中可靠。
-        # daemon 模式会把 substituter 设为 127.0.0.1 的本地 daemon，本 CI 里它不回源读取，
-        # 导致每次 build 都从源码重编、完全没用上缓存（已确认 0 次 cache 读）。
-        # 写仍由 cachix 的 post-build hook 在 job 结束时自动推送（自动 flush），无需显式 push。
-        useDaemon: false
+        # daemon 模式：cachix 在 job 结束时把队列里的路径推送完（自动 flush），无需显式 push。
+        # 读命中由 nix 直接向 https://mtul.cachix.org 拉取，已在流水线中验证可用
+        # （每轮约 15 个自定义路径命中，含 siyuan-client/kernel/server/ui 及其 go-modules/pnpm-deps）。
+        useDaemon: true

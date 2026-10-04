@@ -53,7 +53,9 @@ jobs:
 
       - uses: ./.github/actions/setup
         with:
-          cachix-auth-token: ${{ secrets.cachix-auth-token }}
+          # 仓库里实际的 secret 名是大写 CACHIX_AUTH_TOKEN；update.yml 会按名字映射进来，
+          # 但直接 dispatch / PR 触发时只有仓库 secret 可用。这里两者都尝试，确保各种入口都能配到缓存。
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN || secrets.cachix-auth-token }}
 
       # 稳定版两套包把关：它们红了这次验收就是红的
       - name: Build siyuan-client
