@@ -35,9 +35,9 @@ on:
         default: false
         type: boolean
 
-# 同一时刻只跑一个，避免两次运行同时改 pin / 同时推 main
+# 与 flake-update.yml 共用一个并发组：两个 workflow 都只往 main 推，串行执行避免竞态
 concurrency:
-  group: auto-update-siyuan
+  group: siyuan-main-bot
   cancel-in-progress: false
 
 # 直推 main 需要 contents: write；accept 那个 job 单独降回只读。
@@ -138,24 +138,24 @@ jobs:
     if: needs.prepare.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
+      # 只需要一个带 origin 远程的仓库来做 fetch / push，不需要检出 main 的工作树
       - uses: actions/checkout@v5
-        with:
-          ref: main
 
-      - name: Fast-forward main to the verified commit
+      - name: Fast-forward main to the verified candidate
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch --depth=1 origin \
+          git fetch origin \
             "+refs/heads/${{ needs.prepare.outputs.branch }}:refs/remotes/origin/${{ needs.prepare.outputs.branch }}" \
             "+refs/heads/main:refs/remotes/origin/main"
-          git checkout -B publish "origin/${{ needs.prepare.outputs.branch }}"
-          # main 可能在本轮运行期间被人工推进：先 rebase，再快进推送
-          git rebase origin/main
-          git push origin "HEAD:refs/heads/main"
+          # 服务端快进：candidate 必须是当前 main 的后代，否则拒绝（安全失败、绝不覆盖）。
+          # 不在本地 rebase —— 候选分支是 --depth=1 浅取的，父提交不在本地，
+          # 本地 rebase 会把候选当根提交，与 main 的 flake.nix 撞成 add/add 冲突。
+          candidate="$(git rev-parse "refs/remotes/origin/${{ needs.prepare.outputs.branch }}")"
+          git push origin "${candidate}:refs/heads/main"
           {
             printf '`main` 已快进到验收通过的 commit：stable \`%s\`、alpha \`%s\`\n\n' \
               "${{ needs.prepare.outputs.stable }}" "${{ needs.prepare.outputs.alpha }}"
-            printf '注意：GITHUB_TOKEN 的 push 不会触发 `build.yml`，本次验收已在 accept job 内完成。\n'
+            printf '注意：GITHUB_TOKEN 的 push 不会触发 `accept.yml` 的 push 入口，本次验收已在 accept job 内完成。\n'
           } >> "$GITHUB_STEP_SUMMARY"
