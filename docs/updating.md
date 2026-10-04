@@ -42,11 +42,13 @@
 
 **必须是两个目标**：若用「最高版本」顺带推出 stable 的目标，更新的 alpha 会遮蔽刚发布的正式版——上游正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻 `v3.8.7-alpha.1`），等 `v3.8.7` 发布时窗口里很可能已有 `v3.8.8-alpha.1`，最高版本是那个 alpha，stable 那套 pin 就永远拿不到 `v3.8.7`，`siyuan-server` 停在旧稳定版上。
 
-真正的跨平台验收是这次 push 触发的 `build.yml`（含 `aarch64-darwin`）：**稳定版两套包把关，抢先版 `continue-on-error` 只记录**（上游预发布自带问题很常见）。推送必须是 App 令牌——`GITHUB_TOKEN` 产生的 push 事件不触发其它 workflow，用它推等于没有 CI。
+真正的验收在**同一个 workflow 内**完成：`prepare` 解析目标并轮换 pin、推候选分支 → `accept` 复用 `.github/workflows/accept.yml` 在三个平台（含 `aarch64-darwin`）构建 → 绿了才由 `publish` 快进 `main`。**稳定版两套包把关，抢先版 `continue-on-error` 只记录**（上游预发布自带问题很常见）。
+
+正因为验收在 workflow 内，推送用仓库自带的 `GITHUB_TOKEN` 就够了，不再需要 GitHub App：App 令牌的唯一价值是「让 push 触发别的 workflow」，而我们不依赖那个触发。代价是 bot 推上去的 commit 不会再触发 `build.yml`——那次的结论要看 `update.yml` 的 accept job，`build.yml` 的绿只代表人工推送与 PR。
+
+**秘钥**：只需要 repo secret `CACHIX_AUTH_TOKEN`（推送构建缓存到 cachix `mtul`）。
 
 > 过去两个变体分别放在 `main` 与 `alpha-release` 两个分支上，已废弃：main 独有的内容（workflow、共用的 composite action、打包修复）流不到另一个分支，它自己的 `build.yml` 会因缺文件或旧代码而红（2026-10 撞过一次：它不含 `.github/actions/setup`，构建直接找不到 action）。合成一个分支、用包名区分之后，这类故障在结构上不可能再发生，也不需要 force-push 任何分支。
-
-**身份与秘钥**：workflow 用 GitHub App 令牌而非 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不触发其它 workflow，那样直推上去的 commit 不会触发 `build.yml`，验收信号就没了。因此需一个 GitHub App（repo variable `APP_CLIENT_ID` + repo secret `APP_PRIVATE_KEY`；权限只给 `Contents: Read and write` 与 `Pull requests: Read and write`）。一次性创建步骤见 README 的“自动升级”一节；私钥丢失/轮换时重建后更新这两个值即可。
 
 > 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
 > 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。

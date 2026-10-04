@@ -1,0 +1,96 @@
+name: Build matrix
+
+# 可复用的构建验收：给定 ref，在三个平台上构建并推 cachix。
+# 被三处调用，共用同一份「什么算绿」的定义：
+#   build.yml        人工 push / PR / 手动触发
+#   update.yml       版本升级直推 main 之前的闸门
+#   flake-update.yml nixpkgs lock 更新直推 main 之前的闸门
+#
+# 把关口径：稳定版两套包决定红绿；抢先版（-alpha）与内核测试只记录不把关
+# （上游预发布自带问题很常见，内核测试在沙箱里必然有失败包，见 AGENTS.md）。
+#
+# 为什么抽成 workflow_call 而不是复制三份：三个调用方对「验收」的定义必须完全一致，
+# 否则会出现「update.yml 说绿、build.yml 说红」这种自相矛盾的信号。
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: '要验收的 ref（分支名或 commit SHA）；留空用调用方的 commit'
+        required: false
+        default: ''
+        type: string
+      prefetch:
+        description: '是否额外构建两个 FOD 预取推导（把它们送进 cachix）'
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      cachix-auth-token:
+        description: CACHIX auth token；为空则跳过缓存推送。
+        required: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            system: x86_64-linux
+            server: true
+          - os: ubuntu-24.04-arm
+            system: aarch64-linux
+            server: true
+          # darwin 只能在这类 arm64 macOS runner 上构建/验证：github 的 Linux runner 编不出
+          # aarch64-darwin，我们也没有远端 darwin builder。macOS runner 计费是 Linux 的 10 倍。
+          - os: macos-14
+            system: aarch64-darwin
+            server: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: ./.github/actions/setup
+        with:
+          cachix-auth-token: ${{ secrets.cachix-auth-token }}
+
+      # 稳定版两套包把关：它们红了这次验收就是红的
+      - name: Build siyuan-client
+        run: nix build -L .#siyuan-client
+
+      # 以下三项只有服务端所在的 Linux 平台才有（darwin 只提供 siyuan-client）
+      - name: Build siyuan-server
+        if: matrix.server
+        run: nix build -L .#siyuan-server
+
+      # 抢先版（正式/beta/alpha 中最高者，可能是预发布）只记录不把关：
+      # 上游预发布本身就经常自带问题（例如 v3.8.7-alpha.3 的 darwin 客户端
+      # `spawn python3 ENOENT`），不能让它决定红绿；结论留在这一步的日志里。
+      - name: Build siyuan-client-alpha (informational)
+        continue-on-error: true
+        run: nix build -L .#siyuan-client-alpha
+
+      - name: Build siyuan-server-alpha (informational)
+        if: matrix.server
+        continue-on-error: true
+        run: nix build -L .#siyuan-server-alpha
+
+      # 本推导在沙箱里必然失败（见 AGENTS.md：它专为“一次性暴露全部失败包”而存在），
+      # 不能让它决定 run 的红绿，否则「CI 绿」这个信号等同于失效。失败结果仍留在该 step 的
+      # 日志里供人翻阅（版本升级时就看它有没有出现新的失败包）。
+      # 用 continue-on-error 而不是 if: false，是为了让后面的预取步骤仍能执行——之前这步一红
+      # 就会连带跳过 Build prefetch derivations，那两个哈希预取推导在 CI 里等于形同虚设。
+      - name: Run kernel tests
+        if: matrix.server
+        continue-on-error: true
+        run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
+
+      - name: Build prefetch derivations
+        if: inputs.prefetch && matrix.server
+        run: |
+          nix build -L .#siyuan-server.passthru.kernel.goModules
+          nix build -L .#siyuan-server.passthru.ui.pnpmDeps
+          nix build -L .#siyuan-server-alpha.passthru.kernel.goModules
+          nix build -L .#siyuan-server-alpha.passthru.ui.pnpmDeps

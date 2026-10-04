@@ -1,5 +1,10 @@
 name: Build and Push to Cachix
 
+# 人工 push / PR / 手动触发的入口。真正的构建定义在 ./.github/workflows/accept.yml，
+# update.yml 与 flake-update.yml 也调用同一个——三处共用一份「什么算绿」。
+#
+# 注意：自动化直推 main 用的是 GITHUB_TOKEN，其 push 事件不会再触发本 workflow（GitHub 的规定）。
+# 那部分验收由调用方在自己的 workflow 内跑 accept.yml 完成，不依赖本文件的触发。
 on:
   push:
     branches: [main]
@@ -7,65 +12,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            system: x86_64-linux
-            server: true
-          - os: ubuntu-24.04-arm
-            system: aarch64-linux
-            server: true
-          # darwin 只能在这类 arm64 macOS runner 上构建/验证：github 的 Linux runner 编不出
-          # aarch64-darwin，我们也没有远端 darwin builder。macOS runner 计费是 Linux 的 10 倍。
-          - os: macos-14
-            system: aarch64-darwin
-            server: false
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: ./.github/actions/setup
-        with:
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
-      # 稳定版两套包把关：它们红了 main 就是红的
-      - name: Build siyuan-client
-        run: nix build -L .#siyuan-client
-
-      # 以下三项只有服务端所在的 Linux 平台才有（darwin 只提供 siyuan-client）
-      - name: Build siyuan-server
-        if: matrix.server
-        run: nix build -L .#siyuan-server
-
-      # 抢先版（正式/beta/alpha 中最高者，可能是预发布）只记录不把关：
-      # 上游预发布本身就经常自带问题（例如 v3.8.7-alpha.3 的 darwin 客户端
-      # `spawn python3 ENOENT`），不能让它决定 main 的红绿；结论留在这一步的日志里。
-      - name: Build siyuan-client-alpha (informational)
-        continue-on-error: true
-        run: nix build -L .#siyuan-client-alpha
-
-      - name: Build siyuan-server-alpha (informational)
-        if: matrix.server
-        continue-on-error: true
-        run: nix build -L .#siyuan-server-alpha
-
-      # 本推导在沙箱里必然失败（见 AGENTS.md：它专为“一次性暴露全部失败包”而存在），
-      # 不能让它决定 run 的红绿，否则「CI 绿」这个信号等同于失效。失败结果仍留在该 step 的
-      # 日志里供人翻阅（版本升级时就看它有没有出现新的失败包）。
-      # 用 continue-on-error 而不是 if: false，是为了让后面的预取步骤仍能执行——之前这步一红
-      # 就会连带跳过 Build prefetch derivations，那两个哈希预取推导在 CI 里等于形同虚设。
-      - name: Run kernel tests
-        if: matrix.server
-        continue-on-error: true
-        run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
-
-      - name: Build prefetch derivations
-        if: github.event_name != 'pull_request' && matrix.server
-        run: |
-          nix build -L .#siyuan-server.passthru.kernel.goModules
-          nix build -L .#siyuan-server.passthru.ui.pnpmDeps
-          nix build -L .#siyuan-server-alpha.passthru.kernel.goModules
-          nix build -L .#siyuan-server-alpha.passthru.ui.pnpmDeps
+  accept:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/accept.yml
+    with:
+      # 留空 = 用调用方的 commit（push 是 main 的 tip，PR 是合并提交）
+      ref: ''
+      # PR 上不预取：那些 FOD 由非 PR 的运行送进 cachix 就够了
+      prefetch: ${{ github.event_name != 'pull_request' }}
+    secrets:
+      cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}

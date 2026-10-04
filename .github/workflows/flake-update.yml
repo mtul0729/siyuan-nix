@@ -1,23 +1,14 @@
 name: Update flake lock
 
-# 与 update.yml（SiYuan 版本升级）正交：那条流水线只动 tag 和三个 FOD 哈希，
+# 与 update.yml（SiYuan 版本升级）正交：那条流水线只动 tag 和 FOD 哈希，
 # 这里只跑 `nix flake update` 跟进 flake.lock 里的输入（目前仅 nixpkgs/nixos-unstable）。
 #
-# 不走 PR：构建通过就把 lock 直接推上 main，失败则开 issue 通知。验收分两层——
-#   1) 推送前：本 workflow 在 x86_64-linux 上 nix build 两套包 + nix flake check 求值；
-#   2) 推送后：App 令牌的 push 会触发 build.yml 全矩阵（aarch64-linux / aarch64-darwin
-#      只能在这里验证），第二个 job 盯着那次运行，红了就开 issue。
-# darwin 不在推送前那层是刻意的：本机（ubuntu runner）编不了 aarch64-darwin，
-# 拦不住就只能靠推送后的全矩阵 + 通知兜底。
+# 结构与 update.yml 一致：prepare（更新 lock + 求值闸门 + 推候选分支）→ accept（复用
+# ./.github/workflows/accept.yml 三平台验收）→ publish（快进 main）。
+# 验收放在本 workflow 内，所以同样不需要 GitHub App：GITHUB_TOKEN 推送就够
+# （App 令牌的唯一用途是让 push 触发别的 workflow，而我们不再依赖那个触发）。
 # 只涉及 main 一个分支：两套 pin（stable / alpha）都在同一个 flake.nix 里，
 # 不存在「另一个分支的 lock 落后」这回事。
-#
-# 身份必须是 GitHub App 令牌：GitHub 规定 GITHUB_TOKEN 产生的事件不触发其它 workflow——
-# 用它 push main，build.yml 根本不会跑。App 的一次性配置见 README「自动升级」一节，
-# 两个 workflow 共用同一组 variable/secret。issue 通知反而用 GITHUB_TOKEN（需 issues:write）：
-# 通知不需要触发任何 workflow。
-#
-# 注意：schedule 触发要求本文件已存在于默认分支（main）。
 on:
   schedule:
     # 每周一次即可：nixpkgs 的更新值得追，但不值得像上游 tag 那样每天盯。
@@ -30,32 +21,20 @@ concurrency:
   group: flake-update
   cancel-in-progress: false
 
-# GITHUB_TOKEN 只需 contents:read（读写都走 App 令牌）、issues:write（失败通知）
-# 和 actions:read（watch 用 gh run list/watch 盯 build.yml）。
+# contents: write（推分支与 main）、issues: write（失败时开/更新 issue）
 permissions:
-  contents: read
+  contents: write
   issues: write
-  actions: read
 
 jobs:
-  update:
+  prepare:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.lock.outputs.changed }}
       old_rev: ${{ steps.lock.outputs.old_rev }}
       new_rev: ${{ steps.lock.outputs.new_rev }}
-      sha: ${{ steps.push.outputs.sha }}
     steps:
-      # 先取 App 令牌，再让 checkout 用它，这样 git push 是 App 身份，能触发 build.yml
-      - id: app-token
-        uses: actions/create-github-app-token@v3.2.0
-        with:
-          client-id: ${{ vars.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
       - uses: actions/checkout@v5
-        with:
-          token: ${{ steps.app-token.outputs.token }}
 
       - uses: ./.github/actions/setup
         with:
@@ -75,106 +54,75 @@ jobs:
             echo "flake.lock 已是最新（nixpkgs 仍为 \`$new_rev\`）。" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            # 求值层面的坏更新在这里就拦下；真正的构建在下一步
+            # 求值层面的坏更新在这里就拦下；真正的构建在 accept
             nix flake check --no-build
           fi
 
-      - name: Build server and client (x86_64-linux gate)
+      - name: Push candidate branch
         if: steps.lock.outputs.changed == 'true'
-        run: nix build -L .#siyuan-server .#siyuan-client
-
-      # 直接推 main。若因 main 在本轮运行期间被人合入升级 PR 而拒绝（non-fast-forward），
-      # 本 job 转红并走下面的通知——重跑一次即可，lock 会基于新 main 重算。
-      - name: Push lock to main
-        id: push
-        if: steps.lock.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
-
-          # commit 作者归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID），
-          # 否则 GitHub 不会把 commit 归属到 <app-slug>[bot]（API 里表现为 login: none）。
-          bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c auto-update/flake-lock
           git add flake.lock
           git commit -m "flake: update nixpkgs lock (${{ steps.lock.outputs.old_rev }} → ${{ steps.lock.outputs.new_rev }})"
-          git push origin HEAD:main
-          sha="$(git rev-parse HEAD)"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          {
-            printf 'nixpkgs \`%s\` → \`%s\`，x86_64-linux 构建通过，已直接推上 [main](https://github.com/${{ github.repository }}/commit/%s)。\n\n' \
-              "${{ steps.lock.outputs.old_rev }}" "${{ steps.lock.outputs.new_rev }}" "$sha"
-            printf '全矩阵复核（含 aarch64-linux / aarch64-darwin）由 push 触发的 `build.yml` 进行，红了会自动开 issue。\n'
-          } >> "$GITHUB_STEP_SUMMARY"
+          git push --force origin HEAD:refs/heads/auto-update/flake-lock
 
-      # 通知用 GITHUB_TOKEN 就够：issue 不需要触发其它 workflow
-      - name: Notify on failure (pre-push gate)
-        if: failure() && steps.lock.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          title="flake.lock 自动更新构建失败（合入前）"
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          body="$(printf '%s\n\nnixpkgs `%s` → `%s` 在 x86_64-linux 上构建/求值未通过，lock 未合入。\n\n[查看运行日志](%s)' \
-            "$(date -u '+%Y-%m-%d %H:%M UTC')" \
-            "${{ steps.lock.outputs.old_rev }}" "${{ steps.lock.outputs.new_rev }}" "$run_url")"
-          num="$(gh issue list --state open --json number,title \
-            --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
-          if [[ -n "$num" ]]; then
-            gh issue comment "$num" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body"
-          fi
+  accept:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/accept.yml
+    with:
+      ref: auto-update/flake-lock
+      prefetch: true
+    secrets:
+      cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
-  # 推上去之后盯 build.yml 的全矩阵运行（aarch64-linux / darwin 只在这里能验证），
-  # 红了开 issue。schedule 失败本身也会有邮件，但 issue 是可跟踪、可关的提醒。
-  watch:
-    needs: update
-    if: needs.update.outputs.changed == 'true'
+  publish:
+    needs: [prepare, accept]
+    if: needs.prepare.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Watch post-push build.yml run
-        id: watch
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Fast-forward main to the verified commit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --depth=1 origin \
+            "+refs/heads/auto-update/flake-lock:refs/remotes/origin/auto-update/flake-lock" \
+            "+refs/heads/main:refs/remotes/origin/main"
+          git checkout -B publish origin/auto-update/flake-lock
+          git rebase origin/main
+          git push origin HEAD:refs/heads/main
+          {
+            printf 'nixpkgs \`%s\` → \`%s\`，三平台验收通过，已快进 `main`。\n' \
+              "${{ needs.prepare.outputs.old_rev }}" "${{ needs.prepare.outputs.new_rev }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 任何一步失败且 lock 确有变化时开/更新 issue：这是可跟踪、可关的提醒
+  # （GITHUB_TOKEN 就够，issue 不需要触发任何 workflow）。
+  notify:
+    needs: [prepare, accept, publish]
+    if: failure() && needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          sha='${{ needs.update.outputs.sha }}'
-
-          # push 事件注册成 run 有延迟，轮询等它出现
-          run_id=""
-          for _ in $(seq 1 30); do
-            run_id="$(gh run list --workflow=build.yml --commit "$sha" --limit 1 \
-              --json databaseId --jq '.[0].databaseId // empty' || true)"
-            if [[ -n "$run_id" ]]; then
-              break
-            fi
-            sleep 10
-          done
-          if [[ -z "$run_id" ]]; then
-            echo "::warning::没找到 build.yml 的运行（commit $sha），跳过监视。"
-            exit 0
-          fi
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          gh run watch "$run_id" --exit-status --interval 60
-
-      - name: Notify on failure (post-push)
-        if: failure() && steps.watch.outputs.run_id != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          title="flake.lock 自动更新后全矩阵构建失败"
-          sha='${{ needs.update.outputs.sha }}'
-          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ steps.watch.outputs.run_id }}"
-          body="$(printf '%s\n\nnixpkgs `%s` → `%s` 推上 main 后，`build.yml` 全矩阵未通过。\n\ncommit: %s\n[查看运行日志](%s)' \
+          title="flake.lock 自动更新失败"
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="$(printf '%s\n\nnixpkgs `%s` → `%s` 在自动更新流程中未通过（求值、三平台构建或推送），lock 未合入。\n\n[查看运行日志](%s)' \
             "$(date -u '+%Y-%m-%d %H:%M UTC')" \
-            "${{ needs.update.outputs.old_rev }}" "${{ needs.update.outputs.new_rev }}" \
-            "https://github.com/${{ github.repository }}/commit/$sha" \
+            "${{ needs.prepare.outputs.old_rev }}" "${{ needs.prepare.outputs.new_rev }}" \
             "$run_url")"
           num="$(gh issue list --state open --json number,title \
             --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
