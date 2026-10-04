@@ -92,6 +92,8 @@ jobs:
             echo "tag=$tag"
             echo "alpha_tag=$alpha_tag"
             echo "same=$same"
+            # 本轮开始时 main 的 tip：alpha-release 要以它为基线（见阶段二）
+            echo "base=$(git rev-parse HEAD)"
           } >> "$GITHUB_OUTPUT"
           {
             printf 'main → \`%s\`（最新稳定版）\n\n' "$tag"
@@ -160,11 +162,12 @@ jobs:
             printf '`siyuan-kernel-test` 跑红是设计内常态（沙箱缺少 `../../app/*` 资源），不是本次升级的回归。\n'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # 阶段二：alpha-release 滚到 newest。三种来源：
-      #   a) newest == stable 且 main 本轮升到了它 → 取走 bump 分支那三个文件（不重跑 FOD 构建）
-      #   b) newest == stable 但 main 已经在它上面 → 直接置为 main 的 commit（同 SHA，零哈希轮换）
-      #   c) newest 是预发布 → 在 alpha-release 自己的 checkout 上单独轮换一次
-      # 无论哪种来源，flake.lock 都同步 main 的（alpha 上不做 nixpkgs 升级的决策）。
+      # 阶段二：alpha-release 滚到 newest。一律以 **main 当前的 tip 为基线重建**：
+      #   - newest == stable：main 的 tip 就是它该有的内容（pin 也是本轮换出来的），直接置为该 commit
+      #   - newest 是预发布：在 main 的基线上单独轮换一次
+      # 为什么不在 alpha-release 自己的旧 tip 上叠加：那样 main 的 workflow / composite action /
+      # 打包修复都流不过来，alpha 自己的 build.yml 会缺文件或用旧代码而红（2026-10 就撞过一次：
+      # 它不含 .github/actions/setup，构建直接找不到 action）。以 main 为基线后它始终包含 main 的全部内容。
       - name: Roll alpha-release
         id: alpha
         env:
@@ -174,26 +177,22 @@ jobs:
         run: |
           set -euo pipefail
           alpha_tag='${{ steps.target.outputs.alpha_tag }}'
-          # 两者相同时取用 main 这一轮刚推上去的 commit（其 pin 就是本轮换出来的）
+          # main 本轮结束后的 tip（没升级就是本轮开始时那个）
           main_commit='${{ steps.main-push.outputs.commit }}'
+          if [[ -z "$main_commit" ]]; then
+            main_commit='${{ steps.target.outputs.base }}'
+          fi
 
-          # 必须 checkout alpha-release 本身：该分支的 tag/哈希与 main 不同，
-          # 从 main 起算会把 main 的 pin 当成基准（可能把分支回退到旧正式版）。
-          # main 一并 fetch：flake.lock 要从这里同步（见下）。
-          git fetch --depth=1 origin "+refs/heads/alpha-release:refs/remotes/origin/alpha-release" "+refs/heads/main:refs/remotes/origin/main"
-          git checkout -B alpha-release origin/alpha-release
+          git fetch --depth=1 origin "+refs/heads/alpha-release:refs/remotes/origin/alpha-release"
+          old_tip="$(git rev-parse "origin/alpha-release")"
+          git checkout -B alpha-release "$main_commit"
 
-          mode=commit
+          mode=push
           if [[ '${{ steps.target.outputs.same }}' == "true" ]]; then
-            if [[ '${{ steps.main-bump.outputs.changed }}' == "true" ]]; then
-              git checkout "$main_commit" -- flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
-            elif [[ "$(git rev-parse HEAD)" == "$(git rev-parse "origin/main")" ]]; then
+            # 已经是 main 那个 commit 就别动；否则置为它——比 commit 而非 tree：
+            # 「内容相同但 SHA 不同」正是要消掉的重复，比 tree 会让它永远对齐不过来
+            if [[ "$old_tip" == "$main_commit" ]]; then
               mode=skip
-            else
-              # 已经在 main 那个 commit 上才跳过，否则置为它——比 commit 而非 tree：
-              # 「内容相同但 SHA 不同」正是要消掉的重复，比 tree 会让它永远对齐不过来
-              git reset --hard origin/main
-              mode=push
             fi
           else
             args=()
@@ -201,18 +200,24 @@ jobs:
               args+=(--force)
             fi
             python3 scripts/update.py "${args[@]}" "$alpha_tag"
+            mode=commit
           fi
 
-          # flake.lock 不在 alpha 上自行更新，始终同步 main 的（方向 main → alpha，
-          # 与 pin 同一原则：main 是内容权威）。放在 skip 判定之前——pins 未变但
-          # main 的 lock 更新了（flake-update.yml 推的）也要落一次 commit 推下去，
-          # 否则 alpha 的 nixpkgs 会静默落后。
-          if [[ "$mode" != "push" ]]; then
-            git checkout origin/main -- flake.lock
-          fi
-
-          if [[ "$mode" == "commit" ]] && git diff --quiet HEAD; then
-            mode=skip
+          if [[ "$mode" == "commit" ]]; then
+            if git diff --quiet HEAD; then
+              mode=skip
+            else
+              # commit 作者归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID）
+              bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+              git config user.name "${APP_SLUG}[bot]"
+              git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+              git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix
+              git commit -m "siyuan: bump to $(python3 scripts/update.py --print-pins | jq -r .tag)"
+              # 内容与旧 tip 相同就别推，免得每天制造一个空转的 commit
+              if [[ "$(git rev-parse "HEAD^{tree}")" == "$(git rev-parse "$old_tip^{tree}")" ]]; then
+                mode=skip
+              fi
+            fi
           fi
 
           if [[ "$mode" == "skip" ]]; then
@@ -221,30 +226,15 @@ jobs:
             exit 0
           fi
 
-          if [[ "$mode" == "commit" ]]; then
-            # commit 作者归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID）
-            bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
-            git config user.name "${APP_SLUG}[bot]"
-            git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-            git add flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix flake.lock
-            # pins 没动、只同步了 lock 时，别写成误导性的 "bump to ..."
-            if git diff --quiet HEAD -- flake.nix pkgs/siyuan-kernel.nix pkgs/siyuan-ui.nix; then
-              git commit -m "flake: sync nixpkgs lock from main"
-            else
-              git commit -m "siyuan: bump to $(python3 scripts/update.py --print-pins | jq -r .tag)"
-            fi
-          fi
-
           # 该分支归自动化所有，force 覆盖以保持幂等
           git push --force origin "HEAD:refs/heads/alpha-release"
           echo "changed=true" >> "$GITHUB_OUTPUT"
           {
             printf '滚动更新 `alpha-release` 到 \`%s\`。\n\n' "$alpha_tag"
             case "$mode" in
-              push) printf '与 main 当前目标相同且 main 已在它上面，已直接把该分支置为 `main` 的 commit（未重算哈希）。\n' ;;
-              commit) printf '取用 main 本轮算出的 pin / 由 `scripts/update.py` 单独轮换。\n' ;;
+              push) printf 'newest == stable：该分支已置为 `main` 当前的 commit（未单独轮换哈希）。\n' ;;
+              commit) printf 'newest 是预发布：在 `main` 的基线上由 `scripts/update.py` 轮换一次。\n' ;;
             esac
-            printf '`flake.lock`（nixpkgs 输入）已同步 `main` 的版本，不在 alpha 上单独升级。\n'
             printf '本分支不会自动合并到 `main`——`main` 只追稳定版。\n'
             printf '验收以本分支上的 `build.yml` 为准：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿。\n'
           } >> "$GITHUB_STEP_SUMMARY"

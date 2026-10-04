@@ -44,9 +44,10 @@
 
 | 情形 | 在哪个 checkout 上轮换 | `alpha-release` 怎么拿到 pin |
 | --- | --- | --- |
-| `newest == stable`，main 需要升级 | `main` | 取 `auto-update/siyuan-<tag>` 分支的 `flake.nix` + `pkgs/*.nix` |
-| `newest == stable`，main 已在该 tag | 不轮换 | `git reset --hard origin/main`，直接变成 main 的 commit |
+| `newest == stable` | `main`（一次） | 该分支直接置为 main 的 tip（同 SHA，不重复轮换） |
 | `newest` 是预发布（两者不同） | `main` 升 stable + `alpha-release` 升 newest | 各自轮换，两次都是必需的（tag 不同 ⇒ 哈希不同） |
+
+`alpha-release` 一律**以 main 当前的 tip 为基线重建**，不在它自己的旧 tip 上叠加 commit：否则 main 独有的内容（workflow、共用的 composite action、打包修复）流不过去，它自己的 `build.yml` 就会因为缺文件或旧代码而红——2026-10 撞过一次（它不含 `.github/actions/setup`，构建直接找不到 action）。以 main 为基线后，alpha 恒等于「main + pin」。重建后若 tree 与旧 tip 相同则不推送，避免每天制造空转的 commit。
 
 方向只能是 main → alpha：`main` 是 `flake.nix` 内容（内核接线、NixOS 模块）的权威来源，`alpha-release` 只是在其上叠了 pin 的滚动分支，反过来会把 main 的改动悄悄回退掉。
 
