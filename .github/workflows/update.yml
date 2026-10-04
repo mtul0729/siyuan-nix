@@ -1,8 +1,13 @@
 name: Auto update SiYuan
 
-# 一个分支（main）上维护两套 pin，两个**互相独立**的目标，都由 bot 直推：
+# 一个分支（main）上维护两套 pin，两个**互相独立**的目标：
 #   stable → 最新稳定版（vX.Y.Z）              ：siyuan-server / siyuan-client
 #   alpha  → 正式/beta/alpha 中版本最高者      ：siyuan-server-alpha / siyuan-client-alpha
+#
+# 流程拆成三个 job：prepare（解析 + 轮换 pin，推候选分支）→ accept（复用
+# ./.github/workflows/accept.yml 在三个平台上验收）→ publish（快进 main）。
+# 验收放在本 workflow 内，因此不再需要 GitHub App：用 GITHUB_TOKEN 推送即可
+# （App 令牌的唯一用途是「让 push 触发别的 workflow」，而现在我们不依赖那个触发）。
 #
 # 为什么必须是两个目标而不是「解析一个最高版本」：上游习惯正式版一发就紧接着开下一个版本的
 # alpha（v3.8.6 之后立刻有 v3.8.7-alpha.1），于是 v3.8.7 发布时窗口里很可能已有 v3.8.8-alpha.1，
@@ -10,12 +15,6 @@ name: Auto update SiYuan
 #
 # 两个目标 tag 相同时（最新 release 恰好是正式版）只做一次哈希轮换，两套 pin 一起写——
 # 这就是过去「两个分支在稳定版重合」要去重的那部分，现在结构性消失了。
-#
-# 身份必须是 GitHub App 令牌：GitHub 规定 GITHUB_TOKEN 产生的事件不触发其它 workflow——
-# 用它 push 的话 main 上的 build.yml 根本不会跑，直推就失去了验收。
-# 验收信号就是这次 push 触发的 build.yml：稳定版两套包把关，抢先版只记录不把关。
-#
-# 注意：schedule 触发要求本文件已存在于默认分支（main）。
 on:
   schedule:
     # 每天北京时间 03:17（= 前一天 19:17 UTC）检查一次；cron 只认 UTC，故此处写 19:17
@@ -41,24 +40,20 @@ concurrency:
   group: auto-update-siyuan
   cancel-in-progress: false
 
-# GITHUB_TOKEN 只需只读：写操作（git push）都走下面的 GitHub App 令牌。
+# 直推 main 需要 contents: write；accept 那个 job 单独降回只读。
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  update:
+  prepare:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.rotate.outputs.changed }}
+      branch: ${{ steps.target.outputs.branch }}
+      stable: ${{ steps.target.outputs.stable }}
+      alpha: ${{ steps.target.outputs.alpha }}
     steps:
-      # 先取 App 令牌，再让 checkout 用它，这样 git push 是 App 身份，能触发 build.yml
-      - id: app-token
-        uses: actions/create-github-app-token@v3.2.0
-        with:
-          client-id: ${{ vars.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
       - uses: actions/checkout@v5
-        with:
-          token: ${{ steps.app-token.outputs.token }}
 
       - uses: ./.github/actions/setup
         with:
@@ -83,6 +78,7 @@ jobs:
           {
             echo "stable=$stable"
             echo "alpha=$alpha"
+            echo "branch=auto-update/siyuan-$stable-$alpha"
           } >> "$GITHUB_OUTPUT"
           {
             printf 'stable → \`%s\`（最新稳定版）\n\n' "$stable"
@@ -112,26 +108,55 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit and push to main
+      # 候选分支：accept 在它上面验收、publish 再把它快进到 main。
+      # 用 GITHUB_TOKEN 推分支完全够用（我们不需要它触发别的 workflow）。
+      - name: Push candidate branch
         if: steps.rotate.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
-          stable='${{ steps.target.outputs.stable }}'
-          alpha='${{ steps.target.outputs.alpha }}'
-
-          # commit 归属到 bot：邮箱前缀必须是 bot 的**用户 ID**（不是 App ID），
-          # 否则 GitHub 不会把 commit 归属到 <app-slug>[bot]（API 里表现为 login: none）。
-          bot_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
-          git config user.name "${APP_SLUG}[bot]"
-          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c '${{ steps.target.outputs.branch }}'
           git add flake.nix
-          git commit -m "siyuan: stable $stable / alpha $alpha"
-          # 直推 main（不开 PR）：必须是 App 令牌，GITHUB_TOKEN 的 push 不会触发 build.yml
+          git commit -m "siyuan: stable ${{ steps.target.outputs.stable }} / alpha ${{ steps.target.outputs.alpha }}"
+          git push --force origin 'HEAD:refs/heads/${{ steps.target.outputs.branch }}'
+
+  # 验收：三个平台，稳定版把关、抢先版只记录。红了就不进 publish。
+  accept:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/accept.yml
+    with:
+      ref: ${{ needs.prepare.outputs.branch }}
+      prefetch: true
+    secrets:
+      cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+  publish:
+    needs: [prepare, accept]
+    if: needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Fast-forward main to the verified commit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --depth=1 origin \
+            "+refs/heads/${{ needs.prepare.outputs.branch }}:refs/remotes/origin/${{ needs.prepare.outputs.branch }}" \
+            "+refs/heads/main:refs/remotes/origin/main"
+          git checkout -B publish "origin/${{ needs.prepare.outputs.branch }}"
+          # main 可能在本轮运行期间被人工推进：先 rebase，再快进推送
+          git rebase origin/main
           git push origin "HEAD:refs/heads/main"
           {
-            printf '直推 `main`：stable \`%s\`、alpha \`%s\`。\n\n' "$stable" "$alpha"
-            printf '验收看本次 push 触发的 `build.yml`：稳定版两套包把关，抢先版只记录不把关。\n'
+            printf '`main` 已快进到验收通过的 commit：stable \`%s\`、alpha \`%s\`\n\n' \
+              "${{ needs.prepare.outputs.stable }}" "${{ needs.prepare.outputs.alpha }}"
+            printf '注意：GITHUB_TOKEN 的 push 不会触发 `build.yml`，本次验收已在 accept job 内完成。\n'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -94,9 +94,16 @@ nix flake check --no-build --all-systems            # 三系统纯求值校验
 
 ## nixpkgs（flake.lock）
 
-`.github/workflows/flake-update.yml` 每周一北京时间 03:03 跑一次 `nix flake update`，先在本机做 `nix flake check --no-build` + 两套包的 x86_64-linux 构建当闸门，通过后由 bot 直推 `main`，再盯这次 push 触发的 `build.yml` 全矩阵，红了自动开/更新 issue。只涉及 main 一个分支（两套 pin 同在一个 flake.nix 里，不存在 lock 落后的问题）。
+`.github/workflows/flake-update.yml` 每周一北京时间 03:03 跑一次 `nix flake update`，同样走「候选分支 → 三平台验收 → 快进 main」，任一环节失败就开/更新 issue。只涉及 main 一个分支（两套 pin 同在一个 flake.nix 里，不存在 lock 落后的问题）。
 
-三个 workflow 共用 `.github/actions/setup` 这一个 composite action（装 Nix + cachix daemon，`CACHIX_AUTH_TOKEN` 为空时跳过推送）。
+## 验收与凭据
+
+三个 workflow 共用两块抽象：
+
+- `.github/actions/setup`（composite action）：装 Nix + cachix daemon，`CACHIX_AUTH_TOKEN` 为空时跳过推送。
+- `.github/workflows/accept.yml`（`workflow_call`）：给定 ref，在 `x86_64-linux` / `aarch64-linux` / `aarch64-darwin` 上构建——稳定版两套包把关，抢先版与内核测试只记录。`build.yml`（人工 push / PR）、`update.yml`、`flake-update.yml` 都调用它，三处共用一份「什么算绿」的定义。
+
+自动化**不需要 GitHub App**：验收在各 workflow 内部完成，推送用仓库自带的 `GITHUB_TOKEN` 即可。代价要清楚——GitHub 规定 `GITHUB_TOKEN` 产生的 push 不会触发其它 workflow，所以 bot 推上去的 commit 不会再触发 `build.yml`；那次验收的结果要看 `update.yml` / `flake-update.yml` 里的 accept job，而 `build.yml` 的绿只反映人工推送与 PR。唯一需要的 repo secret 是 `CACHIX_AUTH_TOKEN`（推送构建缓存到 cachix `mtul`）。
 
 手动触发：
 
@@ -107,27 +114,5 @@ gh workflow run update.yml -f alpha_tag=v3.8.8-alpha.1        # 指定 alpha 目
 gh workflow run update.yml -f force=true                      # tag 未变也重算哈希
 gh workflow run flake-update.yml                              # 追 nixpkgs
 ```
-
-### 一次性设置：GitHub App
-
-workflow 需要以 GitHub App 身份开 PR，而不是默认的 `GITHUB_TOKEN`——GitHub 规定 `GITHUB_TOKEN` 产生的事件不会触发其它 workflow，那样 PR 上的 `build.yml` 会停在 `action_required` 等待人工批准，自动化就断了一环。用 App 则 PR 作者是 `<app>[bot]`，其 `pull_request` 事件能正常触发 CI。
-
-1. 打开 <https://github.com/settings/apps/new>，填：
-   - **Name**：`siyuan-nix-updater`（任意唯一名）
-   - **Homepage URL**：`https://github.com/<owner>/<repo>`
-   - **Webhook**：取消勾选 `Active`（本 App 不需要 webhook）
-   - **Repository permissions**：`Contents` → *Read and write*，`Pull requests` → *Read and write*（其余保持 No access）
-   - **Where can this app be installed?** → *Only on this account*，然后 `Create GitHub App`
-2. 装到本仓库：App 页面 → `Install App` → 选账号 → `Only select repositories` → 勾选本仓库 → `Install`
-3. 写入 App 的 **Client ID**（App 页面上，紧邻 App ID）作为 repo variable：
-   ```bash
-   gh variable set APP_CLIENT_ID --body <Client ID>
-   ```
-4. 生成私钥并写入 repo secret：App 页面 → `Private keys` → `Generate a private key`（下载 `.pem`），然后
-   ```bash
-   gh secret set APP_PRIVATE_KEY < /path/to/private-key.pem
-   ```
-
-私钥丢失或轮换时，重复第 3–4 步（同一 App 可生成多把密钥）即可。CI 另需 repo secret `CACHIX_AUTH_TOKEN`（推送构建缓存到 cachix `mtul`）。
 
 维护者文档：[AGENTS.md](AGENTS.md)（仓库结构与工作流）、[docs/updating.md](docs/updating.md)（升级 SOP 与哈希不变量）、[docs/upstream-issues.md](docs/upstream-issues.md)（暂缓上报的上游问题）。
