@@ -11,6 +11,13 @@ name: Build matrix
 #
 # 注意：自动化直推 main 用的是 GITHUB_TOKEN，其 push 事件不会再触发本 workflow（GitHub 的规定）。
 # 那部分验收由调用方在自己的 workflow 内跑到这里完成，不依赖触发。
+permissions:
+  # 显式降权到最小集：checkout 读代码、notify job 下载 artifact（actions:read）并
+  # 开/更新跟踪 issue（issues:write）。workflow_call 时以调用方 accept job 声明的为准。
+  contents: read
+  actions: read
+  issues: write
+
 on:
   workflow_call:
     inputs:
@@ -70,11 +77,13 @@ jobs:
       # 上游预发布本身就经常自带问题（例如 v3.8.7-alpha.3 的 darwin 客户端
       # `spawn python3 ENOENT`），不能让它决定红绿；结论留在这一步的日志里。
       - name: Build siyuan-client-alpha (informational)
+        id: client_alpha
         continue-on-error: true
         run: nix build -L .#siyuan-client-alpha
 
       - name: Build siyuan-server-alpha (informational)
         if: matrix.server
+        id: server_alpha
         continue-on-error: true
         run: nix build -L .#siyuan-server-alpha
 
@@ -85,8 +94,39 @@ jobs:
       # 就会连带跳过 Build prefetch derivations，那两个哈希预取推导在 CI 里等于形同虚设。
       - name: Run kernel tests
         if: matrix.server
+        id: kernel_test
         continue-on-error: true
         run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
+
+      # continue-on-error 会把步骤的 conclusion 抹平成 success（job 与 run 都绿），
+      # Checks API 事后查不出哪些步骤红过——失败明细必须在这里就地记录。
+      # outcome 是真实结果：client_alpha / server_alpha 失败时仍是 failure。
+      - name: Record informational failures
+        if: always()
+        env:
+          SYSTEM: ${{ matrix.system }}
+          CLIENT_ALPHA: ${{ steps.client_alpha.outcome }}
+          SERVER_ALPHA: ${{ steps.server_alpha.outcome }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/informational-failures.txt"
+          : > "$out"
+          [[ "$CLIENT_ALPHA" == failure ]] && echo "$SYSTEM: siyuan-client-alpha" >> "$out" || true
+          if [[ "${{ matrix.server }}" == true ]]; then
+            [[ "$SERVER_ALPHA" == failure ]] && echo "$SYSTEM: siyuan-server-alpha" >> "$out" || true
+          fi
+          cat "$out"
+
+      # notify job 靠这份按系统命名的小 artifact 汇总三平台的失败明细；
+      # 内核测试有意不记录——它在沙箱里设计内必红（见 AGENTS.md），进通知等于天天狼来了。
+      - name: Upload informational failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: informational-failures-${{ matrix.system }}
+          path: ${{ runner.temp }}/informational-failures.txt
+          retention-days: 1
+          if-no-files-found: error
 
       # 预取推导只在非 PR 的运行里跑：PR 上跑它纯属浪费，那些 FOD 由其它运行送进 cachix 就够了
       - name: Build prefetch derivations
@@ -96,3 +136,44 @@ jobs:
           nix build -L .#siyuan-server.passthru.ui.pnpmDeps
           nix build -L .#siyuan-server-alpha.passthru.kernel.goModules
           nix build -L .#siyuan-server-alpha.passthru.ui.pnpmDeps
+
+  # 抢先版（-alpha）两步 continue-on-error，run 永远绿，失败对人类不可见。这个 job 把
+  # 它们变成可跟踪的提醒：有失败就开/更新一个固定标题的 issue（issue 不会触发 workflow，
+  # GITHUB_TOKEN 就够，与 flake-update.yml 的失败跟踪同一套路）；恢复全绿时自动关闭。
+  # 失败明细来自各 build job 上传的 artifact（本 API 的 step conclusion 已被抹平，事后查不到）。
+  # 只在 stable 包全绿的 run 上跑：stable 红时有 update.yml / flake-update.yml 自己的处理，run 上也是显式红叉。
+  notify-informational:
+    name: Report -alpha failures
+    needs: build
+    if: >-
+      always() && needs.build.result == 'success' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Open, update or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: 'siyuan -alpha 包构建失败（informational）'
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          tmp="$(mktemp -d)"
+          gh run download "${{ github.run_id }}" --pattern 'informational-failures-*' --dir "$tmp" || true
+          failed="$(find "$tmp" -name informational-failures.txt -type f -size +0c -exec cat {} + 2>/dev/null || true)"
+          num="$(gh issue list --state open --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n1)"
+          if [[ -z "$failed" ]]; then
+            if [[ -n "$num" ]]; then
+              gh issue close "$num" --comment "$(printf '本轮验收三平台全绿，-alpha 包恢复正常。\n\n[查看运行](%s)' "$run_url")"
+            fi
+            exit 0
+          fi
+          body="$(printf '%s\n\n以下不把关（informational）步骤在验收中失败：stable 包不受影响，发布流程照常。\n\n```\n%s\n```\n\n[查看运行日志](%s)' \
+            "$(date -u '+%Y-%m-%d %H:%M UTC')" "$failed" "$run_url")"
+          if [[ -n "$num" ]]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi

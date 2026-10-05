@@ -132,3 +132,17 @@ v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.j
 - 影响：面向合规的第三方声明给出错误的依赖版本；且脚本里是单值硬编码，未来各平台 zip 分批更新时也无法表达。
 - 顺带一提：该脚本只在 `collect_pandoc_notices()` 里读 `pandoc-windows-amd64.zip` 的 `COPYING.rtf`/`COPYRIGHT.txt`（缺了会 `RuntimeError`），这两份文件是版本无关的，无法借此拿到版本号——要修正只能另取来源（如 `bin/pandoc --version`，或读 zip 内其他随版本变化的文件）。
 - 候选标题：`Third-party notices report Pandoc 3.5 while the bundled binaries are 3.10.1`
+
+## 5. v3.8.7-alpha 起客户端因内置 OCR 资源准备无法在 nix 沙箱构建
+
+- 位置：`app/electron-builder.yml` 在 v3.8.6 → v3.8.7-alpha.4 间新增 `beforePack: "./scripts/beforePack.js"`（配置 diff 里唯一影响打包流程的新增项）；钩子链 `app/scripts/beforePack.js` → `scripts/prepare-ocr.py` → `scripts/ocr-assets.json`。
+- 行为：electron-builder 在打包前跑 `python3 scripts/prepare-ocr.py --runtime <platform>-<arch>`（linux 另加 `--build-worker`），为上游新加的内置 OCR 功能准备资源：
+  - 用 urllib 联网下载 OCR 模型与 onnxruntime 原生运行库到 `app/stage/ocr/`（manifest 带 sha256/size 校验，但下载发生在 electron-builder 阶段，不是 FOD）；
+  - linux 还要求 glibc 交叉 gcc 并现场编译 CGO worker（`go build ./kernel/cmd/ocr-worker`，CC 需 `aarch64-linux-gnu-gcc` / `x86_64-linux-gnu-gcc`）；
+  - darwin 只需 python3 + 联网；Windows 路径另需本机 Visual Studio CRT（与我们无关）。
+- 证据：v3.8.7-alpha.3 起 darwin 客户端 `⨯ spawn python3 ENOENT`（当时唯一重跑的平台）；v3.8.7-alpha.4 三个平台全部同错，失败点在「writing effective config」之后数毫秒——beforePack 钩子第一步 `spawn python3` 即死，沙箱里也没有。stable（v3.8.6，无该钩子）不受影响；`siyuan-server-alpha` 同样正常（server 打包不走 electron-builder）。
+- 为什么不是「给构建环境塞个 python3」就能修：python3 只是第一道坎，钩子随后要在沙箱里联网下载（客户端构建阶段不是 FOD，nix 沙箱无网络），linux 还要 glibc 交叉 gcc 和 kernel 源码树。认真修只有两条路：
+  1. 学 pandoc 的先例：postConfigure 里删掉 beforePack 钩子与 OCR 资源占位，客户端不带 OCR（省事，但 OCR 是上游主推功能，删掉后客户端与上游行为分叉）；
+  2. 把 `prepare-ocr.py` 的下载产物做成 FOD（模型 + onnxruntime 按 `ocr-assets.json` 的哈希预取），构建期只做复制与编译——客户端会引入三个新 FOD（含 darwin 运行库），工作量大得多，且意味着接受把这套二进制装进闭包（与「不装未审计二进制」的 pandoc 立场需重新权衡——不过 manifest 带哈希校验，性质类似 fetchurl）。
+- 现状：`-alpha` 客户端三平台 informational 红（不把关），由 `accept.yml` 的 `notify-informational` job 开/更新跟踪 issue 提醒；该 OCR 资源不进 cachix 也不影响 stable 验收。
+- 候选标题：`v3.8.7-alpha clients cannot build in the nix sandbox: beforePack OCR hook needs python3, network and a glibc toolchain`
