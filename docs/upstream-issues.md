@@ -143,7 +143,11 @@ v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.j
 - 证据：v3.8.7-alpha.3 起 darwin 客户端 `⨯ spawn python3 ENOENT`（当时唯一重跑的平台）；v3.8.7-alpha.4 三个平台全部同错，失败点在「writing effective config」之后数毫秒——beforePack 钩子第一步 `spawn python3` 即死，沙箱里也没有。stable（v3.8.6，无该钩子）不受影响；`siyuan-server-alpha` 同样正常（server 打包不走 electron-builder）。
 - 为什么不是「给构建环境塞个 python3」就能修：python3 只是第一道坎，钩子随后要在沙箱里联网下载（客户端构建阶段不是 FOD，nix 沙箱无网络），linux 还要 glibc 交叉 gcc 和 kernel 源码树。认真修只有两条路：
   1. 学 pandoc 的先例：postConfigure 里删掉 beforePack 钩子与 OCR 资源占位，客户端不带 OCR（省事，但 OCR 是上游主推功能，删掉后客户端与上游行为分叉）；
-  2. 把 `prepare-ocr.py` 的下载产物做成固定输出预取——已采用（见下）。
-- **已解决（2026-10，路线 2）**：`pkgs/siyuan-ocr-assets.nix` 按 manifest 逐条 `fetchurl` 预取（哈希取自清单自身，无需轮换；清单由 `update.py` 从源码 tarball 离线拷出为 `pkgs/ocr-assets{,-alpha}.json`）。客户端 postConfigure 在受控布局里亲手执行与 `beforePack.js` 完全相同的调用（linux 加 `--build-worker`，go 走内核 goModules、`GOPROXY=off`），把模型/运行库放到 `download()` 的哈希校验位使其跳过联网（字节不符即报错），然后把钩子换成 no-op。worker 用 stdenv glibc gcc 编译，与内核二进制的 glibc 兼容性属同一考虑。
-- 现状：已修复。`-alpha` 客户端可正常构建并通过 cachix 复用；跟踪 issue（`siyuan -alpha 包构建失败（informational）`）由 `accept.yml` 的 `notify-informational` job 在首个全绿 run 自动关闭。ocr-worker 二进制进客户端闭包属有意为之：manifest 带哈希校验，信任级别等同 fetchurl 上游制品。
+  2. 把 `prepare-ocr.py` 的下载产物离线化——已采用（见下）。
+- **已解决（2026-10，路线 2，按 nixpkgs 规范收窄后落地）**：三类产物三种待遇——
+  - 模型（onnx 权重/yml，数据文件、从不执行）：按 manifest 逐条 `fetchurl` 预取，哈希取自清单自身，无需轮换；清单由 `update.py` 从源码 tarball 离线拷出为 `pkgs/ocr-assets{,-alpha}.json`。
+  - onnxruntime 预编译库：**不 fetch**（违反本仓库「预编译二进制不进闭包」的 nixpkgs 规范，第一版实现犯过这个错，后修正）。客户端 installPhase 用 nixpkgs `onnxruntime` 包以 store 符号链接放到内核/worker dlopen 的固定路径（pandoc 同款）；`OrtGetApiBase` 的 C API 向后兼容，nixpkgs 新版本可服务按上游旧版本编译的 worker。
+  - ocr-worker：由我们自己从内核源码按上游完全相同的 `go build -trimpath -ldflags="-s -w"` 编译（vendor 模式复用内核 goModules FOD，`GOPROXY=off`）。
+  - 客户端 postConfigure 在受控布局里完成上述工作后把 beforePack 钩子换成 no-op。每一步 fails closed：哈希不符、库缺失都是硬构建错误。
+- 现状：已修复。`-alpha` 客户端可正常构建并通过 cachix 复用；跟踪 issue（`siyuan -alpha 包构建失败（informational）`）由 `accept.yml` 的 `notify-informational` job 在首个全绿 run 自动关闭。残留风险：nixpkgs onnxruntime 版本随 flake-update 滚动（上游 pin 1.24.3，nixpkgs 当前 1.27.x），C API 兼容性风险低，但 OCR 实际识别效果无法在 CI 里验证。
 - 候选标题（历史存档）：`v3.8.7-alpha clients cannot build in the nix sandbox: beforePack OCR hook needs python3, network and a glibc toolchain`

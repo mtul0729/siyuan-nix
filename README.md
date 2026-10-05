@@ -86,7 +86,7 @@ nix flake check --no-build --all-systems            # 三系统纯求值校验
 
 两者必须是独立的目标：上游习惯正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻有 `v3.8.7-alpha.1`），若只解析一个「最高版本」，`v3.8.7` 发布时窗口里可能已有 `v3.8.8-alpha.1`，stable 那套 pin 就永远拿不到 `v3.8.7`。
 
-验收信号是 `accept` job 里那三个平台的构建：**稳定版两套包把关，抢先版只记录不把关**（上游预发布自带问题很常见，例如 v3.8.7-alpha 系列曾因内置 OCR 的打包钩子需要联网而在沙箱里全平台失败——现已按上游 manifest 离线预取资源解决，见 `docs/upstream-issues.md` 第 5 节）；红了 `git revert` 即可。
+验收信号是 `accept` job 里那三个平台的构建：**稳定版两套包把关，抢先版只记录不把关**（上游预发布自带问题很常见，例如 v3.8.7-alpha 系列曾因内置 OCR 的打包钩子需要联网而在沙箱里全平台失败——现已按 nixpkgs 规范解决（模型离线预取、onnxruntime 用 nixpkgs 包运行时替换、worker 自源码编译），见 `docs/upstream-issues.md` 第 5 节）；红了 `git revert` 即可。
 
 **为什么不能只解析一个「最高版本」**：上游习惯正式版一发就紧接着开下一个版本的 alpha（`v3.8.6` 之后立刻有 `v3.8.7-alpha.1`），于是 `v3.8.7` 正式发布时窗口里很可能已有 `v3.8.8-alpha.1`——最高版本是那个 alpha，stable 那套 pin 就永远拿不到 `v3.8.7`。stable 的解析必须独立于预发布。
 
