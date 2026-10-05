@@ -159,21 +159,23 @@ jobs:
           TITLE: 'siyuan -alpha 包构建失败（informational）'
         run: |
           set -euo pipefail
+          # 本 job 不 checkout：gh 无法靠 git remote 推断仓库，所有调用必须显式 -R
+          repo="${{ github.repository }}"
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           tmp="$(mktemp -d)"
-          gh run download "${{ github.run_id }}" --pattern 'informational-failures-*' --dir "$tmp" || true
+          gh run download -R "$repo" "${{ github.run_id }}" --pattern 'informational-failures-*' --dir "$tmp" || true
           failed="$(find "$tmp" -name informational-failures.txt -type f -size +0c -exec cat {} + 2>/dev/null || true)"
-          num="$(gh issue list --state open --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n1)"
+          num="$(gh issue list -R "$repo" --state open --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n1)"
           if [[ -z "$failed" ]]; then
             if [[ -n "$num" ]]; then
-              gh issue close "$num" --comment "$(printf '本轮验收三平台全绿，-alpha 包恢复正常。\n\n[查看运行](%s)' "$run_url")"
+              gh issue close -R "$repo" "$num" --comment "$(printf '本轮验收三平台全绿，-alpha 包恢复正常。\n\n[查看运行](%s)' "$run_url")"
             fi
             exit 0
           fi
           body="$(printf '%s\n\n以下不把关（informational）步骤在验收中失败：stable 包不受影响，发布流程照常。\n\n```\n%s\n```\n\n[查看运行日志](%s)' \
             "$(date -u '+%Y-%m-%d %H:%M UTC')" "$failed" "$run_url")"
           if [[ -n "$num" ]]; then
-            gh issue comment "$num" --body "$body"
+            gh issue comment -R "$repo" "$num" --body "$body"
           else
-            gh issue create --title "$TITLE" --body "$body"
+            gh issue create -R "$repo" --title "$TITLE" --body "$body"
           fi
