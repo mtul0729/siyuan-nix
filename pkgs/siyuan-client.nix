@@ -20,16 +20,46 @@
   xdg-utils,
   pandoc,
   darwin,
+  python3,
+  go_1_26,
+  fetchurl,
   version,
   src,
   # 与 UI 共用的 pnpm 依赖（同一 lockfile，fixed-output 推导可复用）
   pnpmDeps,
-  # 已注入 set-pandoc-path 补丁的内核
+  # 已注入 set-pandoc-path 补丁的内核（worker 编译还要用它的 goModules）
   kernel,
+  # 上游内置 OCR 的资源清单（pkgs/ocr-assets*.json，由 scripts/update.py 从源码 tarball
+  # 离线拷出；版本无内置 OCR 时文件内容为 null）。null 时构建不涉及 OCR。
+  ocrManifest ? null,
 }:
 
 let
   inherit (stdenv.hostPlatform) isDarwin isLinux system;
+
+  # 上游 v3.8.7-alpha 起内置 OCR（beforePack 钩子按 scripts/ocr-assets.json 联网下载资源）。
+  # 有清单就走离线化路径：资源经 fetchurl 预取（哈希取自 manifest，见 siyuan-ocr-assets.nix）。
+  # 不能用 pathExists 探测上游源码树——src 是 FOD 的输出路径，那样做会把源码构建拉进求值（IFD），
+  # nix flake check --no-build 直接挂。
+  ocrParsedManifest =
+    if ocrManifest != null then builtins.fromJSON (builtins.readFile ocrManifest) else null;
+  hasOCR = ocrParsedManifest != null;
+
+  ocrAssets =
+    if hasOCR then
+      import ./siyuan-ocr-assets.nix {
+        inherit lib fetchurl platformId;
+        manifest = ocrParsedManifest;
+      }
+    else null;
+
+  # 模型文件逐个放到 prepare-ocr.py download() 的哈希校验位上（字节相符即跳过联网下载）
+  ocrModelCopies = lib.concatMapStringsSep "\n" (
+    m: ''
+      mkdir -p "$(dirname "stage/ocr/models/${m.path}")"
+      cp -f ${m.file} "stage/ocr/models/${m.path}"
+    ''
+  ) ocrAssets.models;
 
   # 使用 nixpkgs 默认的 electron_43 疑似存在不兼容性问题，例如粘贴功能失效
   # 改用electron_44，与 siyuan 上游的 electron major 版本一致
@@ -91,6 +121,14 @@ stdenv.mkDerivation {
   ++ lib.optionals isDarwin [
     # 打包会把只读 store 里的 Mach-O 可执行文件复制进 .app，需要重新做 ad-hoc 签名
     darwin.autoSignDarwinBinariesHook
+  ]
+  ++ lib.optionals hasOCR [
+    # beforePack 钩子的 OCR 资源准备脚本（纯 stdlib）
+    python3
+  ]
+  ++ lib.optionals (hasOCR && isLinux) [
+    # linux 上上游还要现场编译 CGO 的 ocr-worker（gcc 由 stdenv 提供）
+    go_1_26
   ];
 
   env.ELECTRON_SKIP_BINARY_DOWNLOAD = "1";
@@ -122,6 +160,41 @@ stdenv.mkDerivation {
     # （CI 实测过）。nixpkgs 里的 cp -r + chmod -R u+w 就是这个原因，别当冗余删掉。
     cp -r ${electron.dist} electron-dist
     chmod -R u+w electron-dist
+  ''
+  + lib.optionalString hasOCR ''
+    # ---- 内置 OCR 资源离线化（v3.8.7-alpha 起，见 siyuan-ocr-assets.nix）----
+    # 上游 beforePack 钩子按仓库布局调 ../scripts/prepare-ocr.py（ROOT/app 布局定位资源、
+    # ROOT/kernel 编译 worker），但 nix 构建目录的上一层不可写。故在构建目录里自建一个
+    # 受控的仓库布局镜像，亲手执行与 beforePack.js 完全相同的调用，然后把钩子换成 no-op。
+    mkdir -p ocr-layout/scripts
+    cp -r ${src}/scripts/. ocr-layout/scripts/
+    ln -s "$PWD" ocr-layout/app
+    ln -s ${src}/kernel ocr-layout/kernel
+
+    # 模型放到 download() 的哈希校验位：字节相符即跳过下载，不符则当场报错（fails closed）
+    ${ocrModelCopies}
+    # onnxruntime 归档放到 download() 的缓存位（<tempdir>/siyuan-ocr-assets/<basename>）
+    ocrCache="''${TMPDIR:-/tmp}/siyuan-ocr-assets"
+    mkdir -p "$ocrCache" /tmp/siyuan-ocr-assets
+    cp -f ${ocrAssets.runtime} "$ocrCache/${ocrAssets.runtimeBasename}"
+    if [[ "$ocrCache" != /tmp/siyuan-ocr-assets ]]; then
+      cp -f ${ocrAssets.runtime} /tmp/siyuan-ocr-assets/${ocrAssets.runtimeBasename}
+    fi
+
+    # 与 beforePack.js 相同的参数；linux 另加 --build-worker（CGO worker，gcc 来自 stdenv）。
+    # go 走内核的 goModules FOD，GOPROXY=off 保证零联网，GOTOOLCHAIN=local 杜绝工具链下载。
+    ocrArgs=(--runtime ${ocrAssets.target})
+    ${lib.optionalString isLinux "ocrArgs+=(--build-worker)"}
+    env GOMODCACHE=${kernel.goModules} GOPROXY=off GOTOOLCHAIN=local \
+      GOCACHE="$PWD/.gocache" \
+      python3 ocr-layout/scripts/prepare-ocr.py "''${ocrArgs[@]}"
+
+    # 资源已就位，钩子使命完成：换成 no-op，electron-builder 打包时不再执行
+    cat > scripts/beforePack.js <<'OCR_EOF'
+    // OCR 资源已在构建的 postConfigure 阶段由 nix 预取并就位（无需联网），
+    // 这里 no-op 以避免 electron-builder 重复执行需要联网的上游钩子。
+    module.exports = async function beforePack() {};
+    OCR_EOF
   '';
 
   postBuild = ''

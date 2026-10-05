@@ -5,6 +5,7 @@
     stable → 最新正式版（vX.Y.Z）                 : siyuan-server / siyuan-client
     alpha  → 正式/beta/alpha 中版本最高者          : siyuan-server-alpha / siyuan-client-alpha
 每套各 4 个值（tag + src/vendorHash/pnpmDeps），共 8 个 pin，全部写在 flake.nix 里。
+另有两份 OCR 资源清单 pkgs/ocr-assets{,-alpha}.json（见下），同样由本脚本维护。
 
 用法:
     scripts/update.py                    # 两套 pin 各按自己的目标升级并轮换哈希
@@ -22,20 +23,31 @@
 内容变了却沿用旧哈希时，新推导会与旧产物算出同一路径，Nix 直接跳过构建——依赖不更新、
 补丁不生效、零报错。占位哈希同时改掉声明哈希与输出路径，强制真实构建，也就顺便从
 `hash mismatch ... got: sha256-...` 里读到真值。不变量与背景见 docs/updating.md。
+
+OCR 资源清单：上游 v3.8.7-alpha 起客户端内置 OCR，打包前要按 scripts/ocr-assets.json
+联网下载模型与 onnxruntime。清单随源码 tarball 一起被本脚本取回，规范化后写入
+pkgs/ocr-assets{,-alpha}.json（版本没有该文件时写 null）。客户端求值期按清单逐条
+fetchurl 预取资源，每个条目的哈希取自清单自身——所以它不是 FOD 哈希 pin，
+tag 变更时跟着源码一起换新即可，无需占位哈希轮换。
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import re
 import subprocess
 import sys
+import tarfile
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 UPSTREAM_REPO = "https://github.com/siyuan-note/siyuan.git"
 UPSTREAM_TARBALL = "https://github.com/siyuan-note/siyuan/archive/{tag}.tar.gz"
+# 源码树内 OCR 资源清单的位置（上游 v3.8.7-alpha 起存在，见 pkgs/siyuan-ocr-assets.nix）
+OCR_MANIFEST_IN_TREE = "scripts/ocr-assets.json"
 
 # 只认 vX.Y.Z：上游会先发 -alpha/-beta，且存在 v202205311650-dev 这类非版本 tag。
 STABLE_TAG_RE = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
@@ -78,13 +90,15 @@ def _pin(label: str) -> Pin:
 
 @dataclass(frozen=True)
 class Variant:
-    """一套 pin：它自己的 tag、三个 FOD 哈希，以及对应的预取推导。"""
+    """一套 pin：它自己的 tag、三个 FOD 哈希、OCR 资源清单，以及对应的预取推导。"""
 
     name: str
     tag: Pin
     src: Pin
     vendor: Pin
     pnpm: Pin
+    # 上游内置 OCR 的资源清单落点（规范化 JSON；版本无内置 OCR 时内容为 null）
+    ocr_relpath: str
 
     @property
     def suffix(self) -> str:
@@ -108,6 +122,7 @@ STABLE = Variant(
     src=_pin("stableSrc"),
     vendor=_pin("stableVendorHash"),
     pnpm=_pin("stablePnpmDeps"),
+    ocr_relpath="pkgs/ocr-assets-stable.json",
 )
 ALPHA = Variant(
     "alpha",
@@ -115,8 +130,11 @@ ALPHA = Variant(
     src=_pin("alphaSrc"),
     vendor=_pin("alphaVendorHash"),
     pnpm=_pin("alphaPnpmDeps"),
+    ocr_relpath="pkgs/ocr-assets-alpha.json",
 )
 VARIANTS = (STABLE, ALPHA)
+# 任一步失败都要字节还原的文件（8 个 pin 全在 flake.nix，OCR 清单各占一个文件）
+ROLLBACK_FILES = tuple({Path("flake.nix"), *(Path(v.ocr_relpath) for v in VARIANTS)})
 
 
 def run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -202,6 +220,35 @@ def resolve_fod(repo: Path, installable: str) -> str:
     raise UpdateError(f"无法从 `nix build {installable}` 的输出中提取哈希，日志尾部:\n{tail}")
 
 
+def resolve_ocr_manifest(repo: Path, tag: str) -> str:
+    """取该 tag 的 OCR 资源清单并规范化；没有内置 OCR 的版本写 null。
+
+    流式读 tarball，只为取回一个小 JSON——不值得为它落盘整包。
+    规范化（sort_keys + 固定缩进）保证内容不变时字节不变，git diff 保持安静。
+    """
+    url = UPSTREAM_TARBALL.format(tag=tag)
+    found: str | None = None
+    try:
+        with urllib.request.urlopen(url, timeout=120) as response:
+            with tarfile.open(fileobj=io.BytesIO(response.read()), mode="r:gz") as archive:
+                for member in archive.getmembers():
+                    if not member.isfile() or not member.name.endswith("/" + OCR_MANIFEST_IN_TREE):
+                        continue
+                    text = archive.extractfile(member).read().decode("utf-8")
+                    found = json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+                    break
+    except Exception as exc:
+        raise UpdateError(f"取回 OCR 资源清单失败（{url}）:\n{exc}") from exc
+    if found is None:
+        print(f"{tag}: 源码树无 {OCR_MANIFEST_IN_TREE}，OCR 清单写 null（该版本未内置 OCR）")
+        return "null\n"
+    return found
+
+
+def write_ocr_manifest(repo: Path, variant: Variant, content: str) -> None:
+    (repo / variant.ocr_relpath).write_text(content, encoding="utf-8")
+
+
 def rotate(repo: Path, variant: Variant, tag: str) -> dict[str, str]:
     """把一套 pin 轮换到 tag：先落 tag + 占位哈希，再依次解析 src 与两个 FOD。"""
     print(f"{variant.name}: -> {tag}")
@@ -211,6 +258,9 @@ def rotate(repo: Path, variant: Variant, tag: str) -> dict[str, str]:
 
     values = {"src": resolve_src(repo, tag)}
     write_pin(repo, variant.src, values["src"])
+    # OCR 清单随源码走：tag 变了清单就可能变，与哈希轮换同时落盘
+    values["ocr"] = resolve_ocr_manifest(repo, tag)
+    write_ocr_manifest(repo, variant, values["ocr"])
     # 解析顺序：src 必须先落实，另两个 FOD 都依赖它。
     for pin, installable in zip(variant.hashes[1:], variant.fod_installables, strict=True):
         values[pin.label] = resolve_fod(repo, installable)
@@ -224,6 +274,7 @@ def apply_values(repo: Path, variant: Variant, tag: str, values: dict[str, str])
     write_pin(repo, variant.tag, tag)
     for pin in variant.hashes:
         write_pin(repo, pin, values[pin.label])
+    write_ocr_manifest(repo, variant, values["ocr"])
 
 
 def current_pins(repo: Path) -> dict[str, str]:
@@ -248,8 +299,8 @@ def update(
 
     print(f"目标: stable={stable} alpha={alpha}（当前: stable={current['stable']} alpha={current['alpha']}）")
 
-    # 任一步失败都回滚 flake.nix：8 个 pin 全在这一个文件里，回滚就是一次字节还原。
-    original = (repo / "flake.nix").read_bytes()
+    # 任一步失败都回滚：8 个 pin 在 flake.nix，OCR 清单各占一个文件，回滚即字节还原。
+    saved = {path: path.read_bytes() for path in (repo / p for p in ROLLBACK_FILES)}
     try:
         if stable == alpha:
             # 最新 release 恰好是正式版：一套轮换，两套共用（tag 同 ⇒ 哈希同）
@@ -271,11 +322,15 @@ def update(
                 if proc.returncode != 0:
                     raise UpdateError(f"{installable} 冒烟构建失败")
     except BaseException:
-        (repo / "flake.nix").write_bytes(original)
+        for path, content in saved.items():
+            path.write_bytes(content)
         raise
 
     for pin_label, value in current_pins(repo).items():
         print(f"{pin_label:17} {value}")
+    for variant in VARIANTS:
+        has_ocr = (repo / variant.ocr_relpath).read_text(encoding="utf-8").strip() != "null"
+        print(f"{variant.ocr_relpath:22} {'内置 OCR' if has_ocr else '无 OCR'}")
     return 0
 
 

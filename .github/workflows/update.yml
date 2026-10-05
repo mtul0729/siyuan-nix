@@ -117,7 +117,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c '${{ steps.target.outputs.branch }}'
-          git add flake.nix
+          git add flake.nix pkgs/ocr-assets-stable.json pkgs/ocr-assets-alpha.json
           git commit -m "siyuan: stable ${{ steps.target.outputs.stable }} / alpha ${{ steps.target.outputs.alpha }}"
           git push --force origin 'HEAD:refs/heads/${{ steps.target.outputs.branch }}'
 
@@ -133,6 +133,9 @@ jobs:
     uses: ./.github/workflows/accept.yml
     with:
       ref: ${{ needs.prepare.outputs.branch }}
+      # pins 确有变更才走到这里：这正是内核测试的设计用途（版本升级时暴露全部失败包）。
+      # 设计内必红且不进缓存，故只在此时开启（见 accept.yml 内注释）。
+      run_kernel_test: true
     secrets:
       cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 

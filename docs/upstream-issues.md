@@ -143,6 +143,7 @@ v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.j
 - 证据：v3.8.7-alpha.3 起 darwin 客户端 `⨯ spawn python3 ENOENT`（当时唯一重跑的平台）；v3.8.7-alpha.4 三个平台全部同错，失败点在「writing effective config」之后数毫秒——beforePack 钩子第一步 `spawn python3` 即死，沙箱里也没有。stable（v3.8.6，无该钩子）不受影响；`siyuan-server-alpha` 同样正常（server 打包不走 electron-builder）。
 - 为什么不是「给构建环境塞个 python3」就能修：python3 只是第一道坎，钩子随后要在沙箱里联网下载（客户端构建阶段不是 FOD，nix 沙箱无网络），linux 还要 glibc 交叉 gcc 和 kernel 源码树。认真修只有两条路：
   1. 学 pandoc 的先例：postConfigure 里删掉 beforePack 钩子与 OCR 资源占位，客户端不带 OCR（省事，但 OCR 是上游主推功能，删掉后客户端与上游行为分叉）；
-  2. 把 `prepare-ocr.py` 的下载产物做成 FOD（模型 + onnxruntime 按 `ocr-assets.json` 的哈希预取），构建期只做复制与编译——客户端会引入三个新 FOD（含 darwin 运行库），工作量大得多，且意味着接受把这套二进制装进闭包（与「不装未审计二进制」的 pandoc 立场需重新权衡——不过 manifest 带哈希校验，性质类似 fetchurl）。
-- 现状：`-alpha` 客户端三平台 informational 红（不把关），由 `accept.yml` 的 `notify-informational` job 开/更新跟踪 issue 提醒；该 OCR 资源不进 cachix 也不影响 stable 验收。
-- 候选标题：`v3.8.7-alpha clients cannot build in the nix sandbox: beforePack OCR hook needs python3, network and a glibc toolchain`
+  2. 把 `prepare-ocr.py` 的下载产物做成固定输出预取——已采用（见下）。
+- **已解决（2026-10，路线 2）**：`pkgs/siyuan-ocr-assets.nix` 按 manifest 逐条 `fetchurl` 预取（哈希取自清单自身，无需轮换；清单由 `update.py` 从源码 tarball 离线拷出为 `pkgs/ocr-assets{,-alpha}.json`）。客户端 postConfigure 在受控布局里亲手执行与 `beforePack.js` 完全相同的调用（linux 加 `--build-worker`，go 走内核 goModules、`GOPROXY=off`），把模型/运行库放到 `download()` 的哈希校验位使其跳过联网（字节不符即报错），然后把钩子换成 no-op。worker 用 stdenv glibc gcc 编译，与内核二进制的 glibc 兼容性属同一考虑。
+- 现状：已修复。`-alpha` 客户端可正常构建并通过 cachix 复用；跟踪 issue（`siyuan -alpha 包构建失败（informational）`）由 `accept.yml` 的 `notify-informational` job 在首个全绿 run 自动关闭。ocr-worker 二进制进客户端闭包属有意为之：manifest 带哈希校验，信任级别等同 fetchurl 上游制品。
+- 候选标题（历史存档）：`v3.8.7-alpha clients cannot build in the nix sandbox: beforePack OCR hook needs python3, network and a glibc toolchain`

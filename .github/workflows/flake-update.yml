@@ -81,6 +81,9 @@ jobs:
     uses: ./.github/workflows/accept.yml
     with:
       ref: auto-update/flake-lock
+      # nixpkgs 变更同样会动内核测试的工具链，与 update.yml 同等待遇；
+      # 平时 push/PR 不跑（设计内必红且不进缓存，见 accept.yml 内注释）。
+      run_kernel_test: true
     secrets:
       cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 

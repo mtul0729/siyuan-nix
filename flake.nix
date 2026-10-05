@@ -57,6 +57,13 @@
       alphaVendorHash = "sha256-zc4K2X2twqJdYniS0wZTjcXStfdsPKoZia3Y5AxI6Es=";
       alphaPnpmDeps = "sha256-Inb7jIgMYDrm92LuL2ua7y/i2zz02QARZpJ4ukh/uAg=";
 
+      # 上游内置 OCR 的资源清单（scripts/ocr-assets.json 的逐字规范拷贝），由
+      # scripts/update.py 在 tag 变更时从源码 tarball 离线生成；版本无内置 OCR 时为 null。
+      # 客户端按清单逐条 fetchurl 预取 OCR 资源（哈希取自清单本身，见 pkgs/siyuan-ocr-assets.nix），
+      # 使 beforePack 钩子能在无网络的沙箱内完成。不是 FOD 哈希 pin，不需要轮换。
+      stableOcrAssets = ./pkgs/ocr-assets-stable.json;
+      alphaOcrAssets = ./pkgs/ocr-assets-alpha.json;
+
       # 按一套 pin 构建一整套包。suffix 决定包名后缀（稳定版无后缀，抢先版 -alpha）。
       mkVariant =
         {
@@ -66,6 +73,7 @@
           srcHash,
           vendorHash,
           pnpmDepsHash,
+          ocrAssets,
           suffix ? "",
         }:
         let
@@ -97,6 +105,8 @@
         {
           "siyuan-client${suffix}" = pkgs.callPackage ./pkgs/siyuan-client.nix {
             inherit version src kernel;
+            # OCR 资源清单（json 路径；无 OCR 的版本内容为 null，见 pkgs/siyuan-ocr-assets.nix）
+            ocrManifest = ocrAssets;
             pnpmDeps = ui.pnpmDeps;
           };
         }
@@ -123,6 +133,7 @@
           srcHash = stableSrc;
           vendorHash = stableVendorHash;
           pnpmDepsHash = stablePnpmDeps;
+          ocrAssets = stableOcrAssets;
         }
         // mkVariant {
           inherit pkgs system;
@@ -130,6 +141,7 @@
           srcHash = alphaSrc;
           vendorHash = alphaVendorHash;
           pnpmDepsHash = alphaPnpmDeps;
+          ocrAssets = alphaOcrAssets;
           suffix = "-alpha";
         };
 

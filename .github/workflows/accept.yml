@@ -26,6 +26,11 @@ on:
         required: false
         default: ''
         type: string
+      run_kernel_test:
+        description: '是否跑内核测试。设计内必红（沙箱差异，见 AGENTS.md）且失败推导不进缓存，每次都是数分钟的全价重跑；只在版本/依赖确有变更的验收（update.yml / flake-update.yml）里开。'
+        required: false
+        default: false
+        type: boolean
     secrets:
       cachix-auth-token:
         description: CACHIX auth token；为空则跳过缓存推送。
@@ -34,6 +39,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_kernel_test:
+        description: '是否跑内核测试（设计内必红，仅供人工排查时开启）'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build:
@@ -88,15 +99,15 @@ jobs:
         run: nix build -L .#siyuan-server-alpha
 
       # 本推导在沙箱里必然失败（见 AGENTS.md：它专为“一次性暴露全部失败包”而存在），
-      # 不能让它决定 run 的红绿，否则「CI 绿」这个信号等同于失效。失败结果仍留在该 step 的
-      # 日志里供人翻阅（版本升级时就看它有没有出现新的失败包）。
-      # 用 continue-on-error 而不是 if: false，是为了让后面的预取步骤仍能执行——之前这步一红
-      # 就会连带跳过 Build prefetch derivations，那两个哈希预取推导在 CI 里等于形同虚设。
+      # 不能让它决定 run 的红绿；且失败推导不进缓存，每轮全价重跑耗时数分钟，
+      # 故只在版本/依赖确有变更的验收里跑（调用方传 run_kernel_test），并且只跑 x86_64 一份
+      # （两个 Linux job 各跑一遍是重复付费）。用 continue-on-error 而不是 if: false，
+      # 是为了让后面的预取步骤仍能执行——之前这步一红就会连带跳过 Build prefetch derivations。
       - name: Run kernel tests
-        if: matrix.server
+        if: matrix.system == 'x86_64-linux' && inputs.run_kernel_test
         id: kernel_test
         continue-on-error: true
-        run: nix build -L .#checks.${{ matrix.system }}.siyuan-kernel-test
+        run: nix build -L .#checks.x86_64-linux.siyuan-kernel-test
 
       # continue-on-error 会把步骤的 conclusion 抹平成 success（job 与 run 都绿），
       # Checks API 事后查不出哪些步骤红过——失败明细必须在这里就地记录。
