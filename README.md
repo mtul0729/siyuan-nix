@@ -101,7 +101,7 @@ nix flake check --no-build --all-systems            # 三系统纯求值校验
 三个 workflow 共用两块抽象：
 
 - `.github/actions/setup`（composite action）：装 Nix + cachix daemon，`CACHIX_AUTH_TOKEN` 为空时跳过推送。
-- `.github/workflows/accept.yml`：给定 ref，在 `x86_64-linux` / `aarch64-linux` / `aarch64-darwin` 上构建——稳定版两套包把关，抢先版与内核测试只记录。它同时是三种触发的入口：`workflow_call`（`update.yml` / `flake-update.yml` 在直推 main 前调用）、`push` / `pull_request` / `workflow_dispatch`（直接对当前 commit 验收）。一份定义，不会出现「调用方说绿、单独跑说红」。
+- `.github/workflows/accept.yml`：给定 ref，在 `x86_64-linux` / `aarch64-linux` / `aarch64-darwin` 上构建——稳定版两套包把关，抢先版与内核测试只记录。它同时是三种触发的入口：`workflow_call`（`update.yml` / `flake-update.yml` 在直推 main 前调用）、`push` / `pull_request` / `workflow_dispatch`（直接对当前 commit 验收）。一份定义，不会出现「调用方说绿、单独跑说红」。抢先版两步 `continue-on-error` 后 run 永远绿，失败不会无声消失：各平台把失败明细写进小 artifact，`notify-informational` job 汇总后开/更新固定标题的跟踪 issue（全绿时自动关闭）；内核测试设计内必红，不进通知。
 
 自动化**不需要 GitHub App**：验收在各 workflow 内部完成，推送用仓库自带的 `GITHUB_TOKEN` 即可。代价要清楚——GitHub 规定 `GITHUB_TOKEN` 产生的 push 不会触发其它 workflow，所以 bot 推上去的 commit 不会再触发 `accept.yml` 的 push 入口；那次验收的结果要看 `update.yml` / `flake-update.yml` 里的 accept job，而 `accept.yml` 的 push 入口只反映人工推送与 PR。唯一需要的 repo secret 是 `CACHIX_AUTH_TOKEN`（推送构建缓存到 cachix `mtul`）。
 

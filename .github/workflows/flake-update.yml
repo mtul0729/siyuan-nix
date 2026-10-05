@@ -75,6 +75,9 @@ jobs:
     if: needs.prepare.outputs.changed == 'true'
     permissions:
       contents: read
+      # accept.yml 里的 notify-informational job 需要下载 artifact 并开/更新 -alpha 跟踪 issue
+      actions: read
+      issues: write
     uses: ./.github/workflows/accept.yml
     with:
       ref: auto-update/flake-lock
