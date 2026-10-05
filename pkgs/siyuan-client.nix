@@ -169,7 +169,11 @@ stdenv.mkDerivation {
     mkdir -p ocr-layout/scripts
     cp -r ${src}/scripts/. ocr-layout/scripts/
     ln -s "$PWD" ocr-layout/app
-    ln -s ${src}/kernel ocr-layout/kernel
+    # kernel 必须是真实目录（vendor 要链进去）：goModules FOD 是一棵 vendor 树
+    # （根目录即 modules.txt），worker 与内核同模块，直接复用它即可离线编译
+    mkdir -p ocr-layout/kernel
+    cp -r ${src}/kernel/. ocr-layout/kernel/
+    ln -s ${kernel.goModules} ocr-layout/kernel/vendor
 
     # 模型放到 download() 的哈希校验位：字节相符即跳过下载，不符则当场报错（fails closed）
     ${ocrModelCopies}
@@ -182,10 +186,10 @@ stdenv.mkDerivation {
     fi
 
     # 与 beforePack.js 相同的参数；linux 另加 --build-worker（CGO worker，gcc 来自 stdenv）。
-    # go 走内核的 goModules FOD，GOPROXY=off 保证零联网，GOTOOLCHAIN=local 杜绝工具链下载。
+    # vendor 模式编译：依赖全部来自内核的 goModules FOD，零联网、不写只读缓存。
     ocrArgs=(--runtime ${ocrAssets.target})
     ${lib.optionalString isLinux "ocrArgs+=(--build-worker)"}
-    env GOMODCACHE=${kernel.goModules} GOPROXY=off GOTOOLCHAIN=local \
+    env GOFLAGS=-mod=vendor GOPROXY=off GOTOOLCHAIN=local \
       GOCACHE="$PWD/.gocache" \
       python3 ocr-layout/scripts/prepare-ocr.py "''${ocrArgs[@]}"
 
