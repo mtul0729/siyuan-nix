@@ -31,6 +31,8 @@
 | `vendorHash` | `stableVendorHash` / `alphaVendorHash` | 占位哈希触发构建，从 `hash mismatch ... got:` 取真值 |
 | `pnpmDeps` | `stablePnpmDeps` / `alphaPnpmDeps` | 同上 |
 
+除 8 个 pin 外，`update.py` 还维护两份**OCR 资源清单** `pkgs/ocr-assets{,-alpha}.json`：上游 v3.8.7-alpha 起客户端内置 OCR，打包前要按 `scripts/ocr-assets.json` 联网下载模型与 onnxruntime。清单本身就在源码 tarball 里，所以 `update.py` 在升 tag 时流式取回并规范化（`sort_keys` + 固定缩进，内容不变则字节不变）写入，无内置 OCR 的版本写 `null`。客户端求值期按清单逐条 `fetchurl` 预取资源，每个条目的哈希取自清单自身——**不是 FOD 哈希 pin，不需要占位哈希轮换**（详见 `pkgs/siyuan-ocr-assets.nix`）。回滚范围也覆盖这两份文件：任一步失败，`flake.nix` 与两份清单一起字节还原。
+
 哈希不再写死在 `pkgs/*.nix` 里，而是作为参数注入（`siyuan-kernel.nix` 收 `vendorHash`、`siyuan-ui.nix` 收 `pnpmDepsHash`），因此两个版本共用同一份打包逻辑。8 个 pin 名各自唯一，正则（`^[ \t]*<名字> = "..."$;`）天然只匹配一处，`update.py` 仍强制断言「恰好 1 处」——绝不像写死缩进的 `sed` 那样静默跳过。手动迭代时仍可看 CI 日志里的 `got: sha256-...`，架构无关、两个 matrix 一致。
 
 ### 自动升级（GitHub Actions）
@@ -53,6 +55,9 @@
 > 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
 > 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。
 > 升级的验收只看两个包：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿，无需理会该 check。
+> 另因它失败不进缓存、每轮全价重跑（约 5–7 分钟），CI 里只在版本/依赖确有变更的验收
+> （`update.yml` / `flake-update.yml` 传入 `run_kernel_test: true`）且仅 x86_64-linux 上跑；
+> push / PR / 手动 dispatch 默认不跑，需要时在 dispatch 时勾选 `run_kernel_test`。
 
 ## 为什么占位哈希是必须的（FOD 路径碰撞陷阱）
 
