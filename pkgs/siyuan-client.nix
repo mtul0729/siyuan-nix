@@ -19,6 +19,7 @@
   electron_44,
   xdg-utils,
   pandoc,
+  onnxruntime,
   darwin,
   python3,
   go_1_26,
@@ -97,6 +98,21 @@ let
     mkdir -p ${resourcesDir}/pandoc/bin
     ln -s ${lib.getExe pandoc} ${resourcesDir}/pandoc/bin/pandoc
   '';
+
+  # 内置 OCR 的 onnxruntime 用 nixpkgs 的包做运行时替换（pandoc 同款，见 Gotchas 的
+  # nixpkgs 规范条目）：上游预编译库不进闭包。内核（darwin，进程内）与 worker（linux，
+  # 子进程）都按固定相对路径 dlopen 它，且走 OrtGetApiBase 的 C API——向后兼容，
+  # nixpkgs 的新版本可以服务按上游旧版本编译的 worker。test -e 让链接悬空时构建即失败。
+  dedupeOnnxruntime = resourcesDir: ''
+    ocrRuntimeDir=${resourcesDir}/stage/ocr/runtime/${ocrAssets.target}
+    mkdir -p "$ocrRuntimeDir"
+    ortLib=${lib.getLib onnxruntime}/lib/libonnxruntime.${if isDarwin then "dylib" else "so"}
+    test -e "$ortLib" || {
+      echo "onnxruntime library missing: $ortLib"
+      exit 1
+    }
+    ln -sfn "$ortLib" "$ocrRuntimeDir/libonnxruntime.${if isDarwin then "dylib" else "so"}"
+  '';
 in
 stdenv.mkDerivation {
   pname = "siyuan-client";
@@ -165,7 +181,7 @@ stdenv.mkDerivation {
     # ---- 内置 OCR 资源离线化（v3.8.7-alpha 起，见 siyuan-ocr-assets.nix）----
     # 上游 beforePack 钩子按仓库布局调 ../scripts/prepare-ocr.py（ROOT/app 布局定位资源、
     # ROOT/kernel 编译 worker），但 nix 构建目录的上一层不可写。故在构建目录里自建一个
-    # 受控的仓库布局镜像，亲手执行与 beforePack.js 完全相同的调用，然后把钩子换成 no-op。
+    # 受控的仓库布局镜像，把资源就位后亲手完成钩子的工作，再把钩子换成 no-op。
     mkdir -p ocr-layout/scripts
     cp -r ${src}/scripts/. ocr-layout/scripts/
     ln -s "$PWD" ocr-layout/app
@@ -175,23 +191,24 @@ stdenv.mkDerivation {
     cp -r ${src}/kernel/. ocr-layout/kernel/
     ln -s ${kernel.goModules} ocr-layout/kernel/vendor
 
-    # 模型放到 download() 的哈希校验位：字节相符即跳过下载，不符则当场报错（fails closed）
+    # 模型放到 download() 的哈希校验位：字节相符即跳过下载，不符则当场报错（fails closed）。
+    # 不传 --runtime：onnxruntime 预编译库按 nixpkgs 规范不 fetch（installPhase 用
+    # nixpkgs 包做运行时替换），worker 也由我们按下一段自己编译，钩子的联网部分整体不走。
     ${ocrModelCopies}
-    # onnxruntime 归档放到 download() 的缓存位（<tempdir>/siyuan-ocr-assets/<basename>）
-    ocrCache="''${TMPDIR:-/tmp}/siyuan-ocr-assets"
-    mkdir -p "$ocrCache" /tmp/siyuan-ocr-assets
-    cp -f ${ocrAssets.runtime} "$ocrCache/${ocrAssets.runtimeBasename}"
-    if [[ "$ocrCache" != /tmp/siyuan-ocr-assets ]]; then
-      cp -f ${ocrAssets.runtime} /tmp/siyuan-ocr-assets/${ocrAssets.runtimeBasename}
-    fi
+    python3 ocr-layout/scripts/prepare-ocr.py
 
-    # 与 beforePack.js 相同的参数；linux 另加 --build-worker（CGO worker，gcc 来自 stdenv）。
-    # vendor 模式编译：依赖全部来自内核的 goModules FOD，零联网、不写只读缓存。
-    ocrArgs=(--runtime ${ocrAssets.target})
-    ${lib.optionalString isLinux "ocrArgs+=(--build-worker)"}
-    env GOFLAGS=-mod=vendor GOPROXY=off GOTOOLCHAIN=local \
-      GOCACHE="$PWD/.gocache" \
-      python3 ocr-layout/scripts/prepare-ocr.py "''${ocrArgs[@]}"
+    # worker：与上游 prepare-ocr.py --build-worker 完全相同的命令与产物路径，
+    # 仅以 vendor 模式离线编译（依赖全部来自内核的 goModules FOD，不写只读缓存）
+    mkdir -p stage/ocr/runtime/${ocrAssets.target}
+    ${lib.optionalString isLinux ''
+      workerOut="$PWD/stage/ocr/runtime/${ocrAssets.target}/siyuan-ocr"
+      (
+        cd ocr-layout/kernel
+        env CGO_ENABLED=1 GOFLAGS=-mod=vendor GOPROXY=off GOTOOLCHAIN=local \
+          GOCACHE="$PWD/../../.gocache" \
+          go build -trimpath -ldflags="-s -w" -o "$workerOut" ./ocr/cmd/ocr-worker
+      )
+    ''}
 
     # 资源已就位，钩子使命完成：换成 no-op，electron-builder 打包时不再执行
     cat > scripts/beforePack.js <<'OCR_EOF'
@@ -222,6 +239,7 @@ stdenv.mkDerivation {
     cp -r build/*-unpacked/{locales,resources{,.pak}} $out/share/siyuan
 
     ${dedupePandoc "$out/share/siyuan/resources"}
+    ${lib.optionalString hasOCR (dedupeOnnxruntime "$out/share/siyuan/resources")}
 
     makeWrapper ${lib.getExe electron} $out/bin/siyuan \
         --chdir $out/share/siyuan/resources \
@@ -240,6 +258,7 @@ stdenv.mkDerivation {
     cp -R build/mac*/*.app $out/Applications/SiYuan.app
 
     ${dedupePandoc "$out/Applications/SiYuan.app/Contents/Resources"}
+    ${lib.optionalString hasOCR (dedupeOnnxruntime "$out/Applications/SiYuan.app/Contents/Resources")}
 
     # 与 nixpkgs 一致：darwin 不包装 electron 本身，用 open(1) 拉起 app bundle。
     # $out 在构建期展开，$@ 留给运行期（heredoc 里转义）。
