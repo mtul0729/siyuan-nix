@@ -132,7 +132,7 @@ jobs:
       # 内核测试有意不记录——它在沙箱里设计内必红（见 AGENTS.md），进通知等于天天狼来了。
       - name: Upload informational failures
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: informational-failures-${{ matrix.system }}
           path: ${{ runner.temp }}/informational-failures.txt
