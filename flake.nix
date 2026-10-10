@@ -52,10 +52,10 @@
       stableVendorHash = "sha256-wJInCkkyVIDR3DHsvyQMWVKramQzWTdpwAIXTzZOKrg=";
       stablePnpmDeps = "sha256-E46qhUps5zstSP9xfEWOsg6qWWckbxzWvKZivgSFKik=";
 
-      alphaTag = "v3.8.7-alpha.6";
-      alphaSrc = "sha256-F6D7Q55xGwISg4tinhIWJEOdgG4FaVrgr3sFyfwlp/c=";
-      alphaVendorHash = "sha256-zc4K2X2twqJdYniS0wZTjcXStfdsPKoZia3Y5AxI6Es=";
-      alphaPnpmDeps = "sha256-Inb7jIgMYDrm92LuL2ua7y/i2zz02QARZpJ4ukh/uAg=";
+      alphaTag = "v3.8.7-alpha.7";
+      alphaSrc = "sha256-g5G1QkKIHzMwWJNAFymo/XxTWS9jHSMBDHPMkJVZDg0=";
+      alphaVendorHash = "sha256-Etj9wZ4pqHXkSDD7dNf4bjTAnbZ4vZxehQtS68GUaMs=";
+      alphaPnpmDeps = "sha256-k0Wi8JQq1yF+PWGH5QMTEng3BsTyZTCeMzuNjbA2nx4=";
 
       # 上游内置 OCR 的资源清单（scripts/ocr-assets.json 的逐字规范拷贝），由
       # scripts/update.py 在 tag 变更时从源码 tarball 离线生成；版本无内置 OCR 时为 null。
