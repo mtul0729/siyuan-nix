@@ -28,11 +28,14 @@ let
 in
 stdenv.mkDerivation {
   pname = "siyuan-ui";
-  inherit version;
+  inherit version src pnpmDeps;
 
-  src = src + "/app";
-
-  inherit pnpmDeps;
+  # 整仓解包后 cd 进 app/，而不是直接把 src + "/app" 当作源码根：上游 app/src 下存在跨越
+  # app/ 边界的 import（如 src/protyle/render/av/lunarCalendar.ts →
+  # ../../../../../kernel/av/lunar_calendar_data.json），只取 app/ 子树时 webpack 找不到
+  # kernel/。nixpkgs 的 pkgs/by-name/si/siyuan 也是这个写法（sourceRoot = "${src.name}/app"）。
+  # fetchPnpmDeps 仍取 src + "/app"：内容等价，FOD 哈希不受影响。
+  sourceRoot = "${src.name}/app";
   # pnpmConfigHook 从 PATH 中查找 pnpm，需与 fetchPnpmDeps 使用的版本一致（pnpm_11）
   nativeBuildInputs = [
     nodejs_22

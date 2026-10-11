@@ -151,3 +151,21 @@ v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.j
   - 客户端 postConfigure 在受控布局里完成上述工作后把 beforePack 钩子换成 no-op。每一步 fails closed：哈希不符、库缺失都是硬构建错误。
 - 现状：已修复。`-alpha` 客户端可正常构建并通过 cachix 复用；跟踪 issue（`siyuan -alpha 包构建失败（informational）`）由 `accept.yml` 的 `notify-informational` job 在首个全绿 run 自动关闭。残留风险：nixpkgs onnxruntime 版本随 flake-update 滚动（上游 pin 1.24.3，nixpkgs 当前 1.27.x），C API 兼容性风险低，但 OCR 实际识别效果无法在 CI 里验证。
 - 候选标题（历史存档）：`v3.8.7-alpha clients cannot build in the nix sandbox: beforePack OCR hook needs python3, network and a glibc toolchain`
+
+## 6. app/ 越界 import kernel/（隐式仓库布局契约）
+
+- 位置：`app/src/protyle/render/av/lunarCalendar.ts:1`，v3.8.6 → v3.8.7-alpha.7 随农历功能新增：
+
+  ```ts
+  import data = require("../../../../../kernel/av/lunar_calendar_data.json");
+  ```
+
+  `kernel/av/lunar_calendar_data.json`（同时新增）由 Go 内核运行时读取，前端复用同一份。
+- 行为：`app/` 是一个边界清晰的 npm 包（自己的 `package.json` / `pnpm-lock.yaml`），却越过包根去 `require` Go 后端目录里的文件。这建立了一条**没有写出来的构建契约**：构建前端时 `kernel/` 必须就摆在 `app/` 旁边。只取 `app/` 子树的构建方式（稀疏 checkout、`npm pack` 式打包、本仓库原来的 `src = src + "/app"`）都会在 webpack 阶段失败，且报错点（`lunarCalendar.ts:1`）离真实原因很远。
+- 证据：v3.8.7-alpha.7 三个平台 `siyuan-ui` / `siyuan-client` 全部 `Module not found: Error: Can't resolve '../../../../../kernel/av/lunar_calendar_data.json'`；stable（v3.8.6，无该 import）不受影响。v3.8.6 的 `kernel/av/` 下不存在任何 `lunar*` 文件。
+- **为什么上游不会觉得这是 bug**：上游始终在完整 checkout 里构建，这条契约对它不可见；参考下游 nixpkgs 也踩不到——`pkgs/by-name/si/siyuan/package.nix` 用 `sourceRoot = "${src.name}/app"` 解包整仓再 cd 进去，`kernel/` 天然就在旁边。所以不会有下游反馈施压，报上去也大概率不会被改（放一份数据避免 Go/TS 两侧漂移是有理由的）。
+- **本仓库处置（2026-10）**：不修上游，改自己——`siyuan-ui` / `siyuan-client` 照抄 nixpkgs 的 `sourceRoot = "${src.name}/app"`（整仓解包），`fetchPnpmDeps` 仍取 `src + "/app"`（内容等价，FOD 哈希不轮换）。这比只把 `kernel/` 挂到旁边更稳：整类「越界引用」都免疫，而不是补一个具体目录。
+- 上报用（可选，低优先级，不建议阻塞）：
+
+  - 候选标题：`Frontend build depends on kernel/ via a relative path that escapes the app/ package root`
+  - 要点：建议在 `app/` 内放一份 `lunar_calendar_data.json`（或加构建步骤同步），让 `app/` 可以独立构建；当前写法要求 `kernel/` 与 `app/` 同级，任何只分发 `app/` 的下游都会失败。

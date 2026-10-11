@@ -116,9 +116,13 @@ let
 in
 stdenv.mkDerivation {
   pname = "siyuan-client";
-  inherit version pnpmDeps;
+  inherit version src pnpmDeps;
 
-  src = src + "/app";
+  # 整仓解包后 cd 进 app/（与 nixpkgs 的 pkgs/by-name/si/siyuan 一致），而不是只解包
+  # src + "/app"：上游 app/src 有跨越 app/ 边界引用 kernel/ 的 import
+  # （src/protyle/render/av/lunarCalendar.ts → ../../../../../kernel/av/lunar_calendar_data.json），
+  # 少了并列的 kernel/ 目录 webpack 就解析失败。
+  sourceRoot = "${src.name}/app";
 
   nativeBuildInputs = [
     nodejs_22
