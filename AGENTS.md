@@ -28,6 +28,16 @@ nix flake check --no-build --all-systems   # eval-only validation of all three s
 ./scripts/update.py --print-pins     # print all 8 pins as JSON
 ```
 
+Navigating to upstream source (already in the local nix store — read it there instead of downloading the tarball):
+
+```bash
+just src          # print the stable source tree path in /nix/store (repo root: app/ kernel/ scripts/)
+just src-alpha    # same for the alpha variant
+cd $(just src)    # bash; in nushell: cd (just src)
+```
+
+Both recipes call `scripts/src-path.nu` (nushell), which `nix eval`s `.#siyuan-server{,-alpha}.passthru.ui.src` — a pure eval, no build — and, if that path is not realised yet (i.e. after a `src` hash rotation), realises it with `nix-store --realise <path>` before printing. Note `nix build .#…passthru.ui` is NOT a valid fallback on its own: when the output is substituted from cachix its input FOD is not fetched, so the source tree stays absent; realise by store path first and only fall back to a build.
+
 There are no tests/linters beyond the kernel check derivation; CI (`.github/workflows/accept.yml`) builds on `x86_64-linux`, `aarch64-linux` and `aarch64-darwin` (ubuntu-latest / ubuntu-24.04-arm / macos-14 matrix; the darwin job builds only the clients and their inputs, and macOS minutes cost 10x) and pushes to cachix `mtul` (needs `CACHIX_AUTH_TOKEN` secret). **That file is the single definition of "green"**: given a ref it runs the three-platform matrix — stable packages gate, `-alpha` packages are `continue-on-error`. The kernel test additionally carries a `run_kernel_test` input (default false, x86_64-linux only): it is red by design and failed derivations never get cached (~5–7 min full-price rerun every time), so only the version/dependency-change acceptances (`update.yml` / `flake-update.yml`) pass `run_kernel_test: true`; push / PR / dispatch runs skip it (dispatch exposes the input for manual debugging). It is both the reusable (`workflow_call`) gate used by `update.yml` and `flake-update.yml` before they push to `main`, and the direct entry point for `push` / `pull_request` / `workflow_dispatch`, so the callers can never disagree about what passed. Because `continue-on-error` flattens step conclusions everywhere (Checks API included), failed `-alpha` steps are recorded into per-system artifacts during the build and a `notify-informational` job aggregates them into a fixed-title tracking issue (`siyuan -alpha 包构建失败（informational）`, auto-closed when green again).
 
 **No GitHub App**: acceptance happens inside the calling workflow, so pushes use the repo's own `GITHUB_TOKEN`. The price is that GitHub doesn't fire workflows from `GITHUB_TOKEN` pushes — bot commits to `main` no longer trigger `accept.yml`'s push entry, so their result must be read from the caller's accept job, and that push entry only covers human pushes and PRs. For other branches use `gh workflow run accept.yml --ref <branch>`. A separate workflow, `.github/workflows/flake-update.yml`, runs `nix flake update` weekly (plus `workflow_dispatch`) in the same shape — candidate branch → accept → fast-forward `main`, opening/updating a tracking issue if any step fails. It only ever touches `flake.lock` — never the tags or FOD hashes. The only repo secret needed is `CACHIX_AUTH_TOKEN`.
