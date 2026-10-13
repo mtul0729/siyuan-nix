@@ -52,8 +52,8 @@
       stableVendorHash = "sha256-wJInCkkyVIDR3DHsvyQMWVKramQzWTdpwAIXTzZOKrg=";
       stablePnpmDeps = "sha256-E46qhUps5zstSP9xfEWOsg6qWWckbxzWvKZivgSFKik=";
 
-      alphaTag = "v3.8.7-beta.3";
-      alphaSrc = "sha256-NMf2glZOm6cOuIfyda3lOnwCbWAwQCFxEKMCk/B7jkk=";
+      alphaTag = "v3.8.7-beta.4";
+      alphaSrc = "sha256-hDftiQ4muh17tgJMgxBijp0syDqjdJ1eGVcrsquzPGg=";
       alphaVendorHash = "sha256-LB80C/L6JwaKdKfXvxvUyvzjsUHJqU/5XlT7+Xfhp4I=";
       alphaPnpmDeps = "sha256-8kXtfVWMg/JsUMmTz9XRRC5rH2JQ6ALP+8A8s6ZlX6w=";
 
