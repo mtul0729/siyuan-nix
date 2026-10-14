@@ -133,6 +133,8 @@ ALPHA = Variant(
     ocr_relpath="pkgs/ocr-assets-alpha.json",
 )
 VARIANTS = (STABLE, ALPHA)
+# 一套 pin 的三个哈希按角色排序，与 Variant.hashes 一一对应
+ROLES = ("src", "vendor", "pnpm")
 # 任一步失败都要字节还原的文件（8 个 pin 全在 flake.nix，OCR 清单各占一个文件）
 ROLLBACK_FILES = tuple({Path("flake.nix"), *(Path(v.ocr_relpath) for v in VARIANTS)})
 
@@ -256,15 +258,16 @@ def rotate(repo: Path, variant: Variant, tag: str) -> dict[str, str]:
     for pin in variant.hashes:
         write_pin(repo, pin, PLACEHOLDER)
 
+    # 值按角色（src/vendor/pnpm/ocr）索引，不按 pin 名：同一份结果要能被另一套 pin 复用
     values = {"src": resolve_src(repo, tag)}
     write_pin(repo, variant.src, values["src"])
     # OCR 清单随源码走：tag 变了清单就可能变，与哈希轮换同时落盘
     values["ocr"] = resolve_ocr_manifest(repo, tag)
     write_ocr_manifest(repo, variant, values["ocr"])
     # 解析顺序：src 必须先落实，另两个 FOD 都依赖它。
-    for pin, installable in zip(variant.hashes[1:], variant.fod_installables, strict=True):
-        values[pin.label] = resolve_fod(repo, installable)
-        write_pin(repo, pin, values[pin.label])
+    for role, pin, installable in zip(ROLES[1:], variant.hashes[1:], variant.fod_installables, strict=True):
+        values[role] = resolve_fod(repo, installable)
+        write_pin(repo, pin, values[role])
     return values
 
 
@@ -272,8 +275,8 @@ def apply_values(repo: Path, variant: Variant, tag: str, values: dict[str, str])
     """把另一套 pin 直接写成同一份结果（目标 tag 相同时省掉一次 FOD 构建）。"""
     print(f"{variant.name}: -> {tag}（复用上一套的哈希）")
     write_pin(repo, variant.tag, tag)
-    for pin in variant.hashes:
-        write_pin(repo, pin, values[pin.label])
+    for role, pin in zip(ROLES, variant.hashes, strict=True):
+        write_pin(repo, pin, values[role])
     write_ocr_manifest(repo, variant, values["ocr"])
 
 
