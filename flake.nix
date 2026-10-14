@@ -98,8 +98,7 @@
             ];
           };
           ui = pkgs.callPackage ./pkgs/siyuan-ui.nix {
-            inherit version src;
-            pnpmDepsHash = pnpmDepsHash;
+            inherit version src pnpmDepsHash;
           };
         in
         {
