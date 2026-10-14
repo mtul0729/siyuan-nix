@@ -47,13 +47,13 @@
       #   stable → 最新正式版（vX.Y.Z）        ：siyuan-server / siyuan-client
       #   alpha  → 正式/beta/alpha 中最高者    ：siyuan-server-alpha / siyuan-client-alpha
       #        （“最高者”可能是预发布，也可能是刚发布的正式版，此时两套 pin 相同）
-      stableTag = "v3.8.6";
-      stableSrc = "sha256-rHNhrEXf9OW+t4RVz6HZFTXpEDqpIiD25JYUdV8PEM0=";
-      stableVendorHash = "sha256-wJInCkkyVIDR3DHsvyQMWVKramQzWTdpwAIXTzZOKrg=";
-      stablePnpmDeps = "sha256-E46qhUps5zstSP9xfEWOsg6qWWckbxzWvKZivgSFKik=";
+      stableTag = "v3.8.7";
+      stableSrc = "sha256-VCDtBPUXuuJGltbTlUwdoz+7Cyg+Yj4RKP6IaVmkZpw=";
+      stableVendorHash = "sha256-LB80C/L6JwaKdKfXvxvUyvzjsUHJqU/5XlT7+Xfhp4I=";
+      stablePnpmDeps = "sha256-8kXtfVWMg/JsUMmTz9XRRC5rH2JQ6ALP+8A8s6ZlX6w=";
 
-      alphaTag = "v3.8.7-beta.4";
-      alphaSrc = "sha256-hDftiQ4muh17tgJMgxBijp0syDqjdJ1eGVcrsquzPGg=";
+      alphaTag = "v3.8.7";
+      alphaSrc = "sha256-VCDtBPUXuuJGltbTlUwdoz+7Cyg+Yj4RKP6IaVmkZpw=";
       alphaVendorHash = "sha256-LB80C/L6JwaKdKfXvxvUyvzjsUHJqU/5XlT7+Xfhp4I=";
       alphaPnpmDeps = "sha256-8kXtfVWMg/JsUMmTz9XRRC5rH2JQ6ALP+8A8s6ZlX6w=";
 
