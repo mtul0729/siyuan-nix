@@ -52,12 +52,8 @@
 
 > 过去两个变体分别放在 `main` 与 `alpha-release` 两个分支上，已废弃：main 独有的内容（workflow、共用的 composite action、打包修复）流不到另一个分支，它自己的 `build.yml` 会因缺文件或旧代码而红（2026-10 撞过一次：它不含 `.github/actions/setup`，构建直接找不到 action）。合成一个分支、用包名区分之后，这类故障在结构上不可能再发生，也不需要 force-push 任何分支。
 
-> 关于 `siyuan-kernel-test`：CI 里的内核测试步骤跑红是**设计内常态**，不是升级失败的信号。
-> 它的唯一作用是把上游测试全量跑出来、收集沙箱中失败的证据（见 `flake.nix` 的 checks 注释与 AGENTS.md）。
-> 升级的验收只看两个包：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿，无需理会该 check。
-> 另因它失败不进缓存、每轮全价重跑（约 5–7 分钟），CI 里只在版本/依赖确有变更的验收
-> （`update.yml` / `flake-update.yml` 传入 `run_kernel_test: true`）且仅 x86_64-linux 上跑；
-> push / PR / 手动 dispatch 默认不跑，需要时在 dispatch 时勾选 `run_kernel_test`。
+> 升级的验收只看两个包：`siyuan-server` 与 `siyuan-client` 构建成功即视为绿。
+> 仓库里没有其它测试或 lint：内核的 Go 测试刻意不跑，理由见 `docs/upstream-issues.md` 第 8 节。
 
 ## 为什么占位哈希是必须的（FOD 路径碰撞陷阱）
 

@@ -158,63 +158,6 @@
         }
       );
 
-      # siyuan-kernel-test：内核测试推导，跑法与范围都对齐上游 scripts/test-kernel.mjs
-      # （cd.yml 的 kernel-tests-linux job）：
-      #   - src 换成整仓 + modRoot = "kernel"：checkPhase 的 cwd 是 <构建根>/kernel，测试按
-      #     ../../app/* 读的资源落在 <构建根>/app，也就是上游完整 checkout 的布局。上游
-      #     test-kernel.mjs 的 preparePackageWorkspace 正是为此把 app/docs/scripts 链进 workspace。
-      #   - 只跑上游驱动本身会跑的四包 model / api / util / mcp/tools，逐包串行调用；
-      #     agent / server / av / apicontract 不在其列（上游同样不跑；agent 还会撞 10m 包超时）。
-      #     这不是为了让 CI 变绿而加 -skip：范围取自上游自己的驱动，并把上游给的资源补齐。
-      #   - tags、count=1、10m 包超时与上游一致；缺 SIYUAN_OCR_TEST_* 的 OCR 用例自行 t.Skip。
-      #   - 失败先记账、四包跑完再统一 exit（上游也是收集全部分片结果，而不是第一个红就吞掉后面的）。
-      # 现状（v3.8.7，x86_64-linux 本地实测）：model / api / mcp/tools 绿，util 红一个用例
-      # TestInitPandocDoesNotUseWorkspaceTemp —— 它断言空工作空间里 InitPandoc("") 之后 BinPath 必须
-      # 为空，而 set-pandoc-path.patch 无条件注入 nix pandoc，即我们自己刻意的行为分叉，不是环境问题。
-      # 只在提供 siyuan-server 的平台给出（该推导由服务端包的 passthru.kernel 派生，而服务端只有 Linux 版）。
-      checks = forAllSystems (
-        system:
-        let
-          pkgs = pkgsFor system;
-          packages = mkPackages { inherit pkgs system; };
-        in
-        nixpkgs.lib.optionalAttrs (packages ? siyuan-server) {
-          siyuan-kernel-test =
-            let
-              kernel = packages.siyuan-server.passthru.kernel;
-              # 整仓源码树（同一份 tarball；服务端 passthru.ui.src 就是它）
-              fullSrc = packages.siyuan-server.passthru.ui.src;
-            in
-            kernel.overrideAttrs (_: {
-              pname = "siyuan-kernel-test";
-              doCheck = true;
-              # 整仓解包，再由 modRoot 切进 kernel/（与客户端 sourceRoot = "source/app" 同思路）
-              src = fullSrc;
-              modRoot = "kernel";
-              # src 换成整仓后 patches 的锚点不再在构建根，指到 kernel/ 下去打
-              # （util/pandoc.go 相对 kernel/）；--fuzz 与默认一致，不改动补丁本身。
-              patchFlags = [ "-p1" "-d" "kernel" ];
-              # src 换了但 go.mod 没换：直接复用内核已构建好的 vendor FOD，不再下一次模块
-              goModules = kernel.goModules;
-              # 逐包跑，失败先记账、最后统一结算：上游 renovated 收集全部分片结果，
-              # 而不是第一个红就把后面的包吞掉（否则一次只能看到一个失败包）。
-              checkPhase = ''
-                runHook preCheck
-
-                status=0
-                for pkg in model api util mcp/tools; do
-                  echo "=== go test ./$pkg"
-                  go test -vet=off -count=1 -timeout=10m -tags=fts5,sqlcipher "./$pkg" || status=1
-                done
-
-                runHook postCheck
-                exit $status
-              '';
-              installPhase = "touch $out";
-            });
-        }
-      );
-
       overlays.default =
         final: prev:
         mkPackages {

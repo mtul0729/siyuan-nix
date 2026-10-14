@@ -12,6 +12,7 @@
 | 5 | v3.8.7-alpha 起 OCR 钩子无法在 nix 沙箱构建 | 已解决（资源离线化） | — |
 | 6 | `app/` 越界 import `kernel/` | 不修上游，本仓库改整仓解包 | 可选上报（低优先级，不建议阻塞） |
 | 7 | PlantUML 默认伺服地址把 UML 源码发给第三方 | 记录，不改默认值 | 可选上报 |
+| 8 | 我们不跑内核 Go 测试 | **已决定不跑**（2026-10） | 排查时按该节指引另行搭建环境 |
 
 ## 1. Electron 弹窗把一切文件系统错误渲染成「第三方软件占用」
 
@@ -190,3 +191,13 @@ v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.j
 
   - 候选标题：`PlantUML diagrams are rendered through plantuml.com by default, sending note content to a third party`
   - 要点：建议默认为空并提示用户填写，或随包提供一个本地渲染路径；当前默认值会在用户无感知的情况下外发文档内容。
+
+## 8. 我们不跑内核 Go 测试（2026-10 决定）
+
+曾经有过 `checks.siyuan-kernel-test`（`kernel.overrideAttrs` + `doCheck = true`），2026-10-14 删除。理由与证据留在这里，免得有人日后再把它加回来。
+
+- **上游自己就不把关**：`cd.yml` 的 `kernel-tests-linux` / `kernel-tests-windows` 两个 job，测试步骤全部 `continue-on-error`，注释原文「测试失败只记录结果，不阻塞后续发布构建」。它的驱动是 `scripts/test-kernel.mjs`（`--shards 4`），而且**只跑 4 个包** `model` / `api` / `util` / `mcp/tools`（后三个还要求 `cores >= 4`）；`preparePackageWorkspace()` 给每个包造独立 cwd，把 `app/` `docs/` `scripts/` 链进 workspace —— 也就是说它依赖**完整 checkout**，不是只喂 `kernel/` 子树就能跑的。
+- **我们这里注定红**：`set-pandoc-path.patch` 把 `customPandocBinPath` 无条件改写成 nix pandoc，而 `util` 包的 `TestInitPandocDoesNotUseWorkspaceTemp` 断言「空工作空间里 `InitPandoc("")` 之后 `GetPandocRuntime().BinPath` 必须为空」（`kernel/util/pandoc_test.go:119`）。两边是刻意的冲突：我们就是要让闭包里的 pandoc 直接可用（服务端 docx 导出开箱即用）。要让它变绿只有两条路——把补丁改成环境变量门控（要动 patch + 模块 + 两个 wrapper），或用 `-run` 把这条用例挑出去（等于为了让 check 变绿而跳过，自己骗自己）。
+- **对齐后的实测（v3.8.7，x86_64-linux，整仓解包 + `modRoot = "kernel"` 复刻上游布局）**：`model` ok 136s、`api` ok 46s、`mcp/tools` ok 0.8s、`util` FAIL 且仅此一条。也就是说对齐到最大化后，它给出的全部信息就是我们已经知道的那一个行为分叉，没有第二个发现。
+- **代价是真实的腐烂点**：为了让它跑起来要在 `checks` 里叠三层非标准做法——`src` 换成整仓、`modRoot = "kernel"`、`patchFlags = [ "-p1" "-d" "kernel" ]`（补丁锚点不在构建根了）。每一层都跟着上游与 nixpkgs 的演进 drift。
+- **因此**：`pkgs/siyuan-kernel.nix` 保持纯构建逻辑（`doCheck = false`），验收信号就是 `siyuan-server` / `siyuan-client` 能否构建。真要排查内核行为，在上游完整 checkout 里按 `scripts/test-kernel.mjs` 跑，或用 `nix-shell` 起一份带 go + app 资源的环境，别把那套布局塞回打包推导。
