@@ -105,7 +105,6 @@
         {
           "siyuan-client${suffix}" = pkgs.callPackage ./pkgs/siyuan-client.nix {
             inherit version src kernel;
-            # OCR 资源清单（json 路径；无 OCR 的版本内容为 null，见 pkgs/siyuan-ocr-assets.nix）
             ocrManifest = ocrAssets;
             pnpmDeps = ui.pnpmDeps;
           };
