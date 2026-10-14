@@ -115,4 +115,4 @@ gh workflow run update.yml -f force=true                      # tag 未变也重
 gh workflow run flake-update.yml                              # 追 nixpkgs
 ```
 
-维护者文档：[AGENTS.md](AGENTS.md)（仓库结构与工作流）、[docs/updating.md](docs/updating.md)（升级 SOP 与哈希不变量）、[docs/upstream-issues.md](docs/upstream-issues.md)（暂缓上报的上游问题）。
+维护者文档：[AGENTS.md](AGENTS.md)（仓库结构与工作流）、[docs/updating.md](docs/updating.md)（升级 SOP 与哈希不变量）、[docs/upstream-issues.md](docs/upstream-issues.md)（暂缓上报的上游问题）、[docs/third-party-binaries.md](docs/third-party-binaries.md)（第三方二进制用 nixpkgs 替代的清点记录）。

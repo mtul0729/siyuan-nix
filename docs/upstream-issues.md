@@ -1,7 +1,17 @@
 # 上游问题与上报记录
 
-> 状态：第 1~2 条已于 2026-08-31 **上报**（issue 号见各条）；第 3 条是**阻塞项**（nixpkgs 侧，挡住 pnpm 12），**上游已有 PR 在修**（[#565315](https://github.com/NixOS/nixpkgs/pull/565315)，fetcherVersion 5，见该节「上游进展」）；其余保留证据与思路，待决定时直接取用。
 > 生成 issue 标题遵循主仓库 AGENTS.md 第 7 条：英文、不以 Fix 开头、客观描述症状。
+> 只收**面向上游**的条目；本仓库自己的打包合规清点（第三方二进制用 nixpkgs 替代）在 `docs/third-party-binaries.md`。
+
+| # | 主题 | 状态 | 去向 |
+| --- | --- | --- | --- |
+| 1 | Electron 弹窗把一切文件系统错误归因为「第三方软件占用」 | 已上报（[siyuan#19050](https://github.com/siyuan-note/siyuan/issues/19050)） | 等上游 |
+| 2 | gulu `copyFile` 把只读权限带到目标 | 已上报（[siyuan#19051](https://github.com/siyuan-note/siyuan/issues/19051)），**上游已修** | 本地补丁已删 |
+| 3 | `fetchPnpmDeps` + pnpm 12 在 aarch64-darwin 必红 | **阻塞项**：等 [nixpkgs#565315](https://github.com/NixOS/nixpkgs/pull/565315)（fetcherVersion 5） | 合并后按该节「复检清单」切 |
+| 4 | 第三方声明里的 Pandoc 版本长期未更新 | 证据齐备，未上报 | 可选上报 |
+| 5 | v3.8.7-alpha 起 OCR 钩子无法在 nix 沙箱构建 | 已解决（资源离线化） | — |
+| 6 | `app/` 越界 import `kernel/` | 不修上游，本仓库改整仓解包 | 可选上报（低优先级，不建议阻塞） |
+| 7 | PlantUML 默认伺服地址把 UML 源码发给第三方 | 记录，不改默认值 | 可选上报 |
 
 ## 1. Electron 弹窗把一切文件系统错误渲染成「第三方软件占用」
 
@@ -170,31 +180,13 @@ v11/links/@/es-object-atoms/1.1.2/<hash>/node_modules/es-object-atoms/tsconfig.j
   - 候选标题：`Frontend build depends on kernel/ via a relative path that escapes the app/ package root`
   - 要点：建议在 `app/` 内放一份 `lunar_calendar_data.json`（或加构建步骤同步），让 `app/` 可以独立构建；当前写法要求 `kernel/` 与 `app/` 同级，任何只分发 `app/` 的下游都会失败。
 
-## 7. 第三方二进制清点（2026-10，v3.8.7 全量扫描）
+## 7. PlantUML 默认伺服地址把 UML 源码发给第三方
 
-按「第三方二进制尽量用 nixpkgs 替代」的规范，对 v3.8.7 源码树做了一次全量清点：按扩展名 + 魔数（ELF / MZ / Mach-O / wasm）扫 `app/` `kernel/`，再与两份 `electron-builder-*.yml` 的 `files` / `extraResources` 清单对照，看哪些真的进产物。
+- 位置：`kernel/conf/editor.go:223`，`defaults.PlantUMLServePath = "https://www.plantuml.com/plantuml/svg/~1"`；`kernel/conf/settings_normalize.go:114-115` 在该值为空时回填它；`app/src/config/tabs/editorTab.ts:398` 是用户在设置里改它的入口。
+- 行为：用户插入 ```plantuml 代码块即用默认值渲染——图的内容（代码块里的全部文本）以 URL 形式发往 `plantuml.com`。默认开启、无提示，文档内容因此外发到第三方。
+- 影响：属于「默认配置即外发」的一类，与 pandoc / onnxruntime 那种打包期问题无关，也无法在打包侧解决。
+- **本仓库处置**：不改默认值。nixpkgs 有 `plantuml`，但它是 jar 包装（`plantuml` 命令），而 SiYuan 这个配置项要的是一个 HTTP 服务地址（渲染走 `GET <serve>/svg/~1<encoded>`）；要用本地 plantuml 得另起一个常驻服务，超出打包范围。用户可在设置里自行改成本地服务。
+- 上报用（可选，低优先级）：
 
-**已替换（本仓库做法）**
-
-| 上游提供 | 处置 |
-| --- | --- |
-| `app/pandoc/*.zip`（含 pandoc 3.10.1） | postConfigure 删除并换占位 zip，installPhase 换成 nixpkgs `pandoc` 的 store 符号链接 |
-| OCR 的 onnxruntime 预编译库 | 不 fetch，installPhase 用 nixpkgs `onnxruntime` 符号链接到 dlopen 的固定路径 |
-| Electron 二进制 | nixpkgs `electron_44` + `ELECTRON_SKIP_BINARY_DOWNLOAD=1` |
-| ocr-worker / 内核 | 我们从源码编译（worker 复用内核 `goModules` FOD，vendor 模式） |
-
-**不适用**：`app/elevator/elevator-{amd64,arm64}.exe` 与 `app/nsis-resources/x86-unicode/nsProcess.dll` 是 Windows 安装器的提权/安装插件，两份 yml 的 `extraResources` 都不引用它们，linux / darwin 产物里不存在。
-
-**无法替换，记录在案（渲染进程内的第三方编译产物，随源码 tarball 分发）**
-
-| 文件 | 大小 | 为什么换不成 nixpkgs |
-| --- | --- | --- |
-| `app/stage/protyle/js/graphviz/viz.js` | 1.3M | Graphviz 经 Emscripten 编成 asm.js，由前端在渲染进程里调用（`protyle/render/graphvizRender`）。nixpkgs 的 `graphviz` 是原生 `dot`，而内核侧没有任何 dot 渲染路径（`kernel/` 里 graphviz 只出现在 `av/value.go` 的语言白名单），要换就得改上游的渲染方式 |
-| `app/stage/protyle/js/lute/lute.min.js` | 4.2M | Lute（Go）经 GopherJS 编成 JS，供浏览器/移动端路径使用；内核已把 Lute 作为 Go 依赖链接进去了，这份是给非内核路径的 |
-| `app/stage/protyle/js/pdf/wasm/{jbig2,openjpeg,qcms_bg}.wasm` | 448K | Mozilla pdf.js 的预编译解码器，与 `pdf.min.mjs` 的胶水代码 ABI 绑定；nixpkgs 没有对应形态的包 |
-
-**构建期例外（接受）**：electron-builder 及其工具链（app-builder、esbuild 等）随 npm 包下发预编译二进制，只在构建期使用、不进产物——nixpkgs 打包 node 生态也是同一惯例。
-
-**数据文件（只加载、不执行，故可 fetchurl / 直接用上游的）**：`app/pandoc/pandoc-resources`（lua filter + docx 模板）、OCR 的 onnx 权重与 yml。
-
-**顺带发现（隐私）**：`kernel/conf/editor.go:223` 把 `PlantUMLServePath` 默认设为 `https://www.plantuml.com/plantuml/svg/~1`——默认把 UML 源码发给第三方站点。nixpkgs 有 `plantuml`，但它是 jar 包装、SiYuan 这边要的是一个 HTTP 服务地址，无法直接把默认值改成本地，故只记录不改。
+  - 候选标题：`PlantUML diagrams are rendered through plantuml.com by default, sending note content to a third party`
+  - 要点：建议默认为空并提示用户填写，或随包提供一个本地渲染路径；当前默认值会在用户无感知的情况下外发文档内容。
