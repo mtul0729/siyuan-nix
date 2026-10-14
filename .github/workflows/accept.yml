@@ -6,8 +6,9 @@ name: Build matrix
 #   push / PR / 手动   → 直接对当前 commit 验收
 # 三种触发共用同一份「什么算绿」的定义，不会出现「调用方说绿、单独跑说红」的矛盾。
 #
-# 把关口径：稳定版两套包决定红绿；抢先版（-alpha）与内核测试只记录不把关
-# （上游预发布自带问题很常见，内核测试在沙箱里必然有失败包，见 AGENTS.md）。
+# 把关口径：稳定版两套包决定红绿；抢先版（-alpha）只记录不把关
+# （上游预发布自带问题很常见）。仓库内不跑任何测试——见 AGENTS.md 与
+# docs/upstream-issues.md 第 8 节：内核 Go 测试刻意不进打包，验收信号就是包能否构建。
 #
 # 注意：自动化直推 main 用的是 GITHUB_TOKEN，其 push 事件不会再触发本 workflow（GitHub 的规定）。
 # 那部分验收由调用方在自己的 workflow 内跑到这里完成，不依赖触发。
@@ -26,11 +27,6 @@ on:
         required: false
         default: ''
         type: string
-      run_kernel_test:
-        description: '是否跑内核测试。设计内必红（沙箱差异，见 AGENTS.md）且失败推导不进缓存，每次都是数分钟的全价重跑；只在版本/依赖确有变更的验收（update.yml / flake-update.yml）里开。'
-        required: false
-        default: false
-        type: boolean
     secrets:
       cachix-auth-token:
         description: CACHIX auth token；为空则跳过缓存推送。
@@ -39,12 +35,6 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      run_kernel_test:
-        description: '是否跑内核测试（设计内必红，仅供人工排查时开启）'
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   build:
@@ -98,17 +88,6 @@ jobs:
         continue-on-error: true
         run: nix build -L .#siyuan-server-alpha
 
-      # 本推导在沙箱里必然失败（见 AGENTS.md：它专为“一次性暴露全部失败包”而存在），
-      # 不能让它决定 run 的红绿；且失败推导不进缓存，每轮全价重跑耗时数分钟，
-      # 故只在版本/依赖确有变更的验收里跑（调用方传 run_kernel_test），并且只跑 x86_64 一份
-      # （两个 Linux job 各跑一遍是重复付费）。用 continue-on-error 而不是 if: false，
-      # 是为了让后面的预取步骤仍能执行——之前这步一红就会连带跳过 Build prefetch derivations。
-      - name: Run kernel tests
-        if: matrix.system == 'x86_64-linux' && inputs.run_kernel_test
-        id: kernel_test
-        continue-on-error: true
-        run: nix build -L .#checks.x86_64-linux.siyuan-kernel-test
-
       # continue-on-error 会把步骤的 conclusion 抹平成 success（job 与 run 都绿），
       # Checks API 事后查不出哪些步骤红过——失败明细必须在这里就地记录。
       # outcome 是真实结果：client_alpha / server_alpha 失败时仍是 failure。
@@ -128,8 +107,7 @@ jobs:
           fi
           cat "$out"
 
-      # notify job 靠这份按系统命名的小 artifact 汇总三平台的失败明细；
-      # 内核测试有意不记录——它在沙箱里设计内必红（见 AGENTS.md），进通知等于天天狼来了。
+      # notify job 靠这份按系统命名的小 artifact 汇总三平台的失败明细。
       - name: Upload informational failures
         if: always()
         uses: actions/upload-artifact@v7

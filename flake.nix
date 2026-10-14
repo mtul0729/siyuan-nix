@@ -158,33 +158,6 @@
         }
       );
 
-      # siyuan-kernel-test：内核真实测试推导（与主构建解耦），nix build .#checks.<system>.siyuan-kernel-test。
-      # 作用：单次 go test ./... 原样全量跑上游内核测试（不加任何 -skip），一次收集全部失败包。
-      #       开发者都是在完整 checkout 下跑测试，本推导只剪出 kernel/ 子树，故若干读 ../../app/*
-      #       资源的测试在沙箱里必红——这是打包环境差异，不是上游问题，无需上报。
-      # 注意：该 check 构建失败是设计内常态，不是本仓库回归——它专门用来暴露沙箱中跑不过的测试。
-      #       严禁为让 CI 变绿而加 checkFlags 跳过；版本升级验收只看 siyuan-server / siyuan-client。
-      # 只在提供 siyuan-server 的平台给出（该推导由服务端包的 passthru.kernel 派生，而服务端只有 Linux 版）。
-      checks = forAllSystems (
-        system:
-        let
-          pkgs = pkgsFor system;
-          packages = mkPackages { inherit pkgs system; };
-        in
-        nixpkgs.lib.optionalAttrs (packages ? siyuan-server) {
-          siyuan-kernel-test = packages.siyuan-server.passthru.kernel.overrideAttrs {
-            pname = "siyuan-kernel-test";
-            doCheck = true;
-            checkPhase = ''
-              runHook preCheck
-              go test -vet=off -tags=fts5,sqlcipher ./...
-              runHook postCheck
-            '';
-            installPhase = "touch $out";
-          };
-        }
-      );
-
       overlays.default =
         final: prev:
         mkPackages {

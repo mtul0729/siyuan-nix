@@ -63,7 +63,6 @@ nix build -L .#siyuan-server                        # 服务端包（仅 Linux�
 nix build -L .#siyuan-server-alpha                  # 抢先版服务端包（仅 Linux）
 nix build -L .#siyuan-client                        # 桌面客户端（linux / aarch64-darwin）
 nix build -L .#siyuan-client-alpha                  # 抢先版桌面客户端
-nix build -L .#checks.x86_64-linux.siyuan-kernel-test    # 内核 go 测试（独立于主构建）
 nix flake check --no-build --all-systems            # 三系统纯求值校验
 ./scripts/update.py                                 # 两套 pin 各按目标升级 + 轮换 FOD 哈希
 ./scripts/update.py --print-targets                 # 打印两个目标 tag（JSON）
@@ -101,7 +100,7 @@ nix flake check --no-build --all-systems            # 三系统纯求值校验
 三个 workflow 共用两块抽象：
 
 - `.github/actions/setup`（composite action）：装 Nix + cachix daemon，`CACHIX_AUTH_TOKEN` 为空时跳过推送。
-- `.github/workflows/accept.yml`：给定 ref，在 `x86_64-linux` / `aarch64-linux` / `aarch64-darwin` 上构建——稳定版两套包把关，抢先版只记录。它同时是三种触发的入口：`workflow_call`（`update.yml` / `flake-update.yml` 在直推 main 前调用）、`push` / `pull_request` / `workflow_dispatch`（直接对当前 commit 验收）。一份定义，不会出现「调用方说绿、单独跑说红」。抢先版两步 `continue-on-error` 后 run 永远绿，失败不会无声消失：各平台把失败明细写进小 artifact，`notify-informational` job 汇总后开/更新固定标题的跟踪 issue（全绿时自动关闭）。内核测试设计内必红且失败不进缓存（每轮全价重跑 5–7 分钟），因此只在版本/依赖确有变更的验收里跑（`run_kernel_test: true`，仅 x86_64-linux），不进通知。
+- `.github/workflows/accept.yml`：给定 ref，在 `x86_64-linux` / `aarch64-linux` / `aarch64-darwin` 上构建——稳定版两套包把关，抢先版只记录。它同时是三种触发的入口：`workflow_call`（`update.yml` / `flake-update.yml` 在直推 main 前调用）、`push` / `pull_request` / `workflow_dispatch`（直接对当前 commit 验收）。一份定义，不会出现「调用方说绿、单独跑说红」。抢先版两步 `continue-on-error` 后 run 永远绿，失败不会无声消失：各平台把失败明细写进小 artifact，`notify-informational` job 汇总后开/更新固定标题的跟踪 issue（全绿时自动关闭）。仓库里没有测试与 lint：内核测试刻意不跑（理由见 `docs/upstream-issues.md` 第 8 节），验收信号就是包能否构建。
 
 自动化**不需要 GitHub App**：验收在各 workflow 内部完成，推送用仓库自带的 `GITHUB_TOKEN` 即可。代价要清楚——GitHub 规定 `GITHUB_TOKEN` 产生的 push 不会触发其它 workflow，所以 bot 推上去的 commit 不会再触发 `accept.yml` 的 push 入口；那次验收的结果要看 `update.yml` / `flake-update.yml` 里的 accept job，而 `accept.yml` 的 push 入口只反映人工推送与 PR。唯一需要的 repo secret 是 `CACHIX_AUTH_TOKEN`（推送构建缓存到 cachix `mtul`）。
 
