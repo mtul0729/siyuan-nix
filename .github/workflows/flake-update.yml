@@ -111,6 +111,14 @@ jobs:
               "${{ needs.prepare.outputs.old_rev }}" "${{ needs.prepare.outputs.new_rev }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # 删除候选分支：它的内容已快进进 main，本身只是给 accept 提供 ref 的一次性用途
+      # （固定名靠 --force 复用，不删也只是常驻一条，纯粹是为了不留无用 ref）。
+      # 未能走到这里的候选分支（accept 红、快进被拒）刻意保留 —— 那是排查现场。
+      - name: Delete candidate branch
+        run: |
+          set -euo pipefail
+          git push origin --delete refs/heads/auto-update/flake-lock
+
   # 任何一步失败且 lock 确有变化时开/更新 issue：这是可跟踪、可关的提醒
   # （GITHUB_TOKEN 就够，issue 不需要触发任何 workflow）。
   notify:

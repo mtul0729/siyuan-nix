@@ -162,3 +162,12 @@ jobs:
               "${{ needs.prepare.outputs.stable }}" "${{ needs.prepare.outputs.alpha }}"
             printf '注意：GITHUB_TOKEN 的 push 不会触发 `accept.yml` 的 push 入口，本次验收已在 accept job 内完成。\n'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # 候选分支名带版本号，不清理就是每轮 tag（上游几乎每天一个预发布）留一条。
+      # 删除是安全的：内容已在 main 上（上面那次 push 就是把它快进过去的），
+      # 分支本身只是给 accept 提供 ref 的一次性用途。
+      # 未走到这里的候选分支（accept 红、快进被拒）刻意保留 —— 那是排查现场。
+      - name: Delete candidate branch
+        run: |
+          set -euo pipefail
+          git push origin --delete 'refs/heads/${{ needs.prepare.outputs.branch }}'
