@@ -52,9 +52,9 @@
       stableVendorHash = "sha256-LB80C/L6JwaKdKfXvxvUyvzjsUHJqU/5XlT7+Xfhp4I=";
       stablePnpmDeps = "sha256-8kXtfVWMg/JsUMmTz9XRRC5rH2JQ6ALP+8A8s6ZlX6w=";
 
-      alphaTag = "v3.8.7";
-      alphaSrc = "sha256-VCDtBPUXuuJGltbTlUwdoz+7Cyg+Yj4RKP6IaVmkZpw=";
-      alphaVendorHash = "sha256-LB80C/L6JwaKdKfXvxvUyvzjsUHJqU/5XlT7+Xfhp4I=";
+      alphaTag = "v3.8.8-alpha.1";
+      alphaSrc = "sha256-AlrDspO+nNryIzyyI+v7Rz7fXyK7AKptsgmGGIGb0gU=";
+      alphaVendorHash = "sha256-sxik6FBnusrhx1z5+9/F8cMZgtkBV5hTcA8akuP5GVU=";
       alphaPnpmDeps = "sha256-8kXtfVWMg/JsUMmTz9XRRC5rH2JQ6ALP+8A8s6ZlX6w=";
 
       # 上游内置 OCR 的资源清单（scripts/ocr-assets.json 的逐字规范拷贝），由
