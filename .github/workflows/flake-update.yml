@@ -11,9 +11,8 @@ name: Update flake lock
 # 不存在「另一个分支的 lock 落后」这回事。
 on:
   schedule:
-    # 每天一次，挂在 03:03 UTC（北京 11:03）——GitHub Actions 负载最低的时段（美国深夜）；
-    # cron 只认 UTC。顺带与 update.yml（19:17 UTC）拉开距离：两者共用并发组
-    # siyuan-main-bot 且 cancel-in-progress: false，撞车时后一个只能排队等。
+    # 每天一次，03:03 UTC（北京 11:03，GitHub 负载低谷的美国深夜）——cron 只认 UTC。
+    # 与 update.yml（19:17 UTC）错开：两者共用并发组 siyuan-main-bot，撞车时后一个要排队。
     - cron: '3 3 * * *'
   workflow_dispatch:
 

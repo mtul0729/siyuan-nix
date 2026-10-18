@@ -93,7 +93,7 @@ nix flake check --no-build --all-systems            # 三系统纯求值校验
 
 ## nixpkgs（flake.lock）
 
-`.github/workflows/flake-update.yml` 每天 UTC 03:03（北京 11:03，GitHub Actions 负载最低的时段）跑一次 `nix flake update`，同样走「候选分支 → 三平台验收 → 快进 main」，任一环节失败就开/更新 issue。只涉及 main 一个分支（两套 pin 同在一个 flake.nix 里，不存在 lock 落后的问题）。
+`.github/workflows/flake-update.yml` 每天北京时间 11:03（= 03:03 UTC，GitHub 负载低谷的美国深夜）跑一次 `nix flake update`，同样走「候选分支 → 三平台验收 → 快进 main」，任一环节失败就开/更新 issue。只涉及 main 一个分支（两套 pin 同在一个 flake.nix 里，不存在 lock 落后的问题）。
 
 ## 验收与凭据
 
