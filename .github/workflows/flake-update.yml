@@ -11,9 +11,10 @@ name: Update flake lock
 # 不存在「另一个分支的 lock 落后」这回事。
 on:
   schedule:
-    # 每周一次即可：nixpkgs 的更新值得追，但不值得像上游 tag 那样每天盯。
-    # 每周北京时间 03:03（= 周日 19:03 UTC）；cron 只认 UTC，故此处写 19:03 周日
-    - cron: '3 19 * * 0'
+    # 每天一次，挂在 03:03 UTC（北京 11:03）——GitHub Actions 负载最低的时段（美国深夜）；
+    # cron 只认 UTC。顺带与 update.yml（19:17 UTC）拉开距离：两者共用并发组
+    # siyuan-main-bot 且 cancel-in-progress: false，撞车时后一个只能排队等。
+    - cron: '3 3 * * *'
   workflow_dispatch:
 
 # 与 update.yml 共用一个并发组：两个 workflow 都只往 main 推，绝不能在同一时刻各推各的

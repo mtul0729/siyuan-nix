@@ -65,7 +65,7 @@ Two targets, never one: deriving stable's target from "the highest release" woul
 
 Previously the two variants lived on two branches (`main` + `alpha-release`); that was abandoned because main-only content (workflows, the shared composite action, packaging fixes) never reached the other branch and its own CI broke on missing files or stale code. One branch with two package names makes that whole class of failures impossible.
 
-Second automated path: `.github/workflows/flake-update.yml` runs `nix flake update` weekly (Sunday 19:03 UTC / Monday 03:03 Beijing). It is a prepare → accept → publish pipeline in the same shape as `update.yml`: `nix flake update` on a candidate branch, gate on the shared `accept.yml` matrix, then fast-forward `main` only if green. It only ever touches `flake.lock` — never the tags or FOD hashes.
+Second automated path: `.github/workflows/flake-update.yml` runs `nix flake update` daily (03:03 UTC / 11:03 Beijing — GitHub Actions off-peak). It is a prepare → accept → publish pipeline in the same shape as `update.yml`: `nix flake update` on a candidate branch, gate on the shared `accept.yml` matrix, then fast-forward `main` only if green. It only ever touches `flake.lock` — never the tags or FOD hashes.
 
 All three workflows share `.github/actions/setup` (composite action): install-nix + cachix daemon, with `access-tokens = github.com=${{ github.token }}` so Nix can fetch private/ rate-limited GitHub inputs. Cachix push is skipped when `CACHIX_AUTH_TOKEN` is empty (e.g. forks).
 
