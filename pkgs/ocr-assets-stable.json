@@ -1,4 +1,20 @@
 {
+  "linuxWorker": {
+    "glibc": "2.28",
+    "toolchains": {
+      "aarch64": {
+        "sha256": "958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f",
+        "size": 49471996,
+        "url": "https://ziglang.org/download/0.15.2/zig-aarch64-linux-0.15.2.tar.xz"
+      },
+      "x86_64": {
+        "sha256": "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239",
+        "size": 53733924,
+        "url": "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz"
+      }
+    },
+    "zigVersion": "0.15.2"
+  },
   "models": [
     {
       "path": "tiny/det/inference.onnx",

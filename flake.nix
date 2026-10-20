@@ -47,15 +47,15 @@
       #   stable → 最新正式版（vX.Y.Z）        ：siyuan-server / siyuan-client
       #   alpha  → 正式/beta/alpha 中最高者    ：siyuan-server-alpha / siyuan-client-alpha
       #        （“最高者”可能是预发布，也可能是刚发布的正式版，此时两套 pin 相同）
-      stableTag = "v3.8.7";
-      stableSrc = "sha256-VCDtBPUXuuJGltbTlUwdoz+7Cyg+Yj4RKP6IaVmkZpw=";
-      stableVendorHash = "sha256-LB80C/L6JwaKdKfXvxvUyvzjsUHJqU/5XlT7+Xfhp4I=";
-      stablePnpmDeps = "sha256-8kXtfVWMg/JsUMmTz9XRRC5rH2JQ6ALP+8A8s6ZlX6w=";
+      stableTag = "v3.8.8";
+      stableSrc = "sha256-sa4p6shcbSYKXE7Zp7XilmqcAOp4kNKhoQNtl4zPpyE=";
+      stableVendorHash = "sha256-pc1HFKp2TQeCBJHdc2lnQwlpxg8IJ9CKnPoYe+C6cKA=";
+      stablePnpmDeps = "sha256-e+qyTEL2jfgJENleWC3Zk7C98rRFjUE9rdZGjWmaOpU=";
 
-      alphaTag = "v3.8.8-beta.4";
-      alphaSrc = "sha256-GUx9fwIOfM4l4DvQtbYYIjh3K9dwYxsbmxgIt0saIjM=";
-      alphaVendorHash = "sha256-pc1HFKp2TQeCBJHdc2lnQwlpxg8IJ9CKnPoYe+C6cKA=";
-      alphaPnpmDeps = "sha256-e+qyTEL2jfgJENleWC3Zk7C98rRFjUE9rdZGjWmaOpU=";
+      alphaTag = "v3.8.9-alpha.2";
+      alphaSrc = "sha256-icSimiLhAvym0oNF+zLOjEhaps5jqI9NXdNLnr/5Ldk=";
+      alphaVendorHash = "sha256-wnG93RJVovVjy/bzqYr18i/cQXURVQs5n0Xhll/NeR8=";
+      alphaPnpmDeps = "sha256-CoW/KJ+dIy1NebTZlnMUKdLOESc6gLC/vfn4WT8qKsI=";
 
       # 上游内置 OCR 的资源清单（scripts/ocr-assets.json 的逐字规范拷贝），由
       # scripts/update.py 在 tag 变更时从源码 tarball 离线生成；版本无内置 OCR 时为 null。
